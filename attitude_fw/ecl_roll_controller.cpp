@@ -113,8 +113,13 @@ float ECL_RollController::control_bodyrate(const struct ECL_ControlData &ctl_dat
 	}
 
 	/* Apply PI rate controller and store non-limited output */
-	_last_output = _bodyrate_setpoint * _k_ff * ctl_data.scaler +
-		       _rate_error * _k_p * ctl_data.scaler * ctl_data.scaler
+	//_last_output = _bodyrate_setpoint * _k_ff * ctl_data.scaler +
+	//	       _rate_error * _k_p * ctl_data.scaler * ctl_data.scaler
+	//	       + _integrator;  //scaler is proportional to 1/airspeed
+
+	/* Apply PI rate controller and store non-limited output */
+	_last_output = _bodyrate_setpoint * _k_ff  +
+		       _rate_error * _k_p 
 		       + _integrator;  //scaler is proportional to 1/airspeed
 
 	return math::constrain(_last_output, -1.0f, 1.0f);
