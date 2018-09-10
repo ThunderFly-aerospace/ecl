@@ -94,6 +94,7 @@ float ECL_RollController::control_bodyrate(const struct ECL_ControlData &ctl_dat
 
 	if (!lock_integrator && _k_i > 0.0f) {
 
+		//float id = _rate_error * dt * ctl_data.scaler;
 		float id = _rate_error * dt * ctl_data.scaler;
 
 		/*

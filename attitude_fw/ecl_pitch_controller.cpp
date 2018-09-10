@@ -102,6 +102,7 @@ float ECL_PitchController::control_bodyrate(const struct ECL_ControlData &ctl_da
 
 	if (!lock_integrator && _k_i > 0.0f) {
 
+		//float id = _rate_error * dt * ctl_data.scaler;
 		float id = _rate_error * dt * ctl_data.scaler;
 
 		/*
