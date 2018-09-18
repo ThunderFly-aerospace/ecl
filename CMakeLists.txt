@@ -158,6 +158,7 @@ endif()
 
 add_subdirectory(airdata)
 add_subdirectory(attitude_fw)
+add_subdirectory(attitude_ag)
 add_subdirectory(EKF)
 add_subdirectory(geo)
 add_subdirectory(geo_lookup)
