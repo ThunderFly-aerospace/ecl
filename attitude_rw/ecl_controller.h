@@ -66,6 +66,9 @@ struct ECL_ControlData {
 	float airspeed_min;
 	float airspeed_max;
 	float airspeed;
+	float rotorspeed_min;
+	float rotorspeed_max;
+	float rotorspeed;
 	float scaler;
 	float groundspeed;
 	float groundspeed_scaler;

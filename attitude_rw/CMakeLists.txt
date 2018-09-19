@@ -31,13 +31,13 @@
 #
 ############################################################################
 
-add_library(ecl_attitude_ag
+add_library(ecl_attitude_rw
 	ecl_controller.cpp
 	ecl_pitch_controller.cpp
 	ecl_roll_controller.cpp
 	ecl_wheel_controller.cpp
 	ecl_yaw_controller.cpp
 	)
-add_dependencies(ecl_attitude_ag prebuild_targets)
-target_compile_definitions(ecl_attitude_ag PRIVATE -DMODULE_NAME="ecl/attitude_ag")
-target_include_directories(ecl_attitude_ag PUBLIC ${ECL_SOURCE_DIR})
+add_dependencies(ecl_attitude_rw prebuild_targets)
+target_compile_definitions(ecl_attitude_rw PRIVATE -DMODULE_NAME="ecl/attitude_rw")
+target_include_directories(ecl_attitude_rw PUBLIC ${ECL_SOURCE_DIR})
