@@ -1356,6 +1356,13 @@ void Ekf::controlMagFusion()
 	// check for new magnetometer data that has fallen behind the fusion time horizon
 	// If we are using external vision data for heading then no magnetometer fusion is used
 	if (!_control_status.flags.ev_yaw && _mag_data_ready) {
+		// perform a yaw reset if requested by other functions
+		if (_mag_yaw_reset_req) {
+			if (!_mag_use_inhibit ) {
+				resetMagHeading(_mag_sample_delayed.mag);
+			}
+			_mag_yaw_reset_req = false;
+		}
 
 		// Determine if we should use simple magnetic heading fusion which works better when there are large external disturbances
 		// or the more accurate 3-axis fusion
@@ -1494,13 +1501,14 @@ void Ekf::controlMagFusion()
 
 		} else if (_params.mag_fusion_type == MAG_FUSE_TYPE_3D) {
 			// if transitioning into 3-axis fusion mode, we need to initialise the yaw angle and field states
-			if (!_control_status.flags.mag_3D) {
-				_control_status.flags.yaw_align = resetMagHeading(_mag_sample_delayed.mag) || _control_status.flags.yaw_align;
+			if (!_control_status.flags.mag_3D || !_flt_mag_align_complete) {
+				_flt_mag_align_complete = resetMagHeading(_mag_sample_delayed.mag);
+				_control_status.flags.yaw_align = _control_status.flags.yaw_align || _flt_mag_align_complete;
 			}
 
-			// always use 3-axis mag fusion
+			// use 3-axis mag fusion if reset was successful
+			_control_status.flags.mag_3D = _flt_mag_align_complete;
 			_control_status.flags.mag_hdg = false;
-			_control_status.flags.mag_3D = true;
 
 		} else {
 			// do no magnetometer fusion at all
