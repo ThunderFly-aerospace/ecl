@@ -176,7 +176,7 @@ void EstimatorInterface::setMagData(uint64_t time_usec, float (&data)[3])
 	}
 
 	// limit data rate to prevent data being lost
-	if (time_usec - _time_last_mag > _min_obs_interval_us) {
+	if ((time_usec - _time_last_mag) > _min_obs_interval_us) {
 
 		magSample mag_sample_new;
 		mag_sample_new.time_us = time_usec - _params.mag_delay_ms * 1000;
@@ -190,7 +190,7 @@ void EstimatorInterface::setMagData(uint64_t time_usec, float (&data)[3])
 	}
 }
 
-void EstimatorInterface::setGpsData(uint64_t time_usec, struct gps_message *gps)
+void EstimatorInterface::setGpsData(uint64_t time_usec, const gps_message &gps)
 {
 	if (!_initialised || _gps_buffer_fail) {
 		return;
@@ -210,35 +210,35 @@ void EstimatorInterface::setGpsData(uint64_t time_usec, struct gps_message *gps)
 	// limit data rate to prevent data being lost
 	bool need_gps = (_params.fusion_mode & MASK_USE_GPS) || (_params.vdist_sensor_type == VDIST_SENSOR_GPS);
 
-	if (((time_usec - _time_last_gps) > _min_obs_interval_us) && need_gps && gps->fix_type > 2) {
+	if (((time_usec - _time_last_gps) > _min_obs_interval_us) && need_gps && gps.fix_type > 2) {
 		gpsSample gps_sample_new;
-		gps_sample_new.time_us = gps->time_usec - _params.gps_delay_ms * 1000;
+		gps_sample_new.time_us = gps.time_usec - _params.gps_delay_ms * 1000;
 
 		gps_sample_new.time_us -= FILTER_UPDATE_PERIOD_MS * 1000 / 2;
 		_time_last_gps = time_usec;
 
 		gps_sample_new.time_us = math::max(gps_sample_new.time_us, _imu_sample_delayed.time_us);
-		gps_sample_new.vel = Vector3f(gps->vel_ned);
+		gps_sample_new.vel = Vector3f(gps.vel_ned);
 
-		_gps_speed_valid = gps->vel_ned_valid;
-		gps_sample_new.sacc = gps->sacc;
-		gps_sample_new.hacc = gps->eph;
-		gps_sample_new.vacc = gps->epv;
+		_gps_speed_valid = gps.vel_ned_valid;
+		gps_sample_new.sacc = gps.sacc;
+		gps_sample_new.hacc = gps.eph;
+		gps_sample_new.vacc = gps.epv;
 
-		gps_sample_new.hgt = (float)gps->alt * 1e-3f;
+		gps_sample_new.hgt = (float)gps.alt * 1e-3f;
 
-		gps_sample_new.yaw = gps->yaw;
-		if (ISFINITE(gps->yaw_offset)) {
-			_gps_yaw_offset = gps->yaw_offset;
+		gps_sample_new.yaw = gps.yaw;
+		if (ISFINITE(gps.yaw_offset)) {
+			_gps_yaw_offset = gps.yaw_offset;
 		} else {
 			_gps_yaw_offset = 0.0f;
 		}
 
 		// Only calculate the relative position if the WGS-84 location of the origin is set
-		if (collect_gps(time_usec, gps)) {
+		if (collect_gps(gps)) {
 			float lpos_x = 0.0f;
 			float lpos_y = 0.0f;
-			map_projection_project(&_pos_ref, (gps->lat / 1.0e7), (gps->lon / 1.0e7), &lpos_x, &lpos_y);
+			map_projection_project(&_pos_ref, (gps.lat / 1.0e7), (gps.lon / 1.0e7), &lpos_x, &lpos_y);
 			gps_sample_new.pos(0) = lpos_x;
 			gps_sample_new.pos(1) = lpos_y;
 
@@ -269,7 +269,7 @@ void EstimatorInterface::setBaroData(uint64_t time_usec, float data)
 	}
 
 	// limit data rate to prevent data being lost
-	if (time_usec - _time_last_baro > _min_obs_interval_us) {
+	if ((time_usec - _time_last_baro) > _min_obs_interval_us) {
 
 		baroSample baro_sample_new;
 		baro_sample_new.hgt = data;
@@ -302,7 +302,7 @@ void EstimatorInterface::setAirspeedData(uint64_t time_usec, float true_airspeed
 	}
 
 	// limit data rate to prevent data being lost
-	if (time_usec - _time_last_airspeed > _min_obs_interval_us) {
+	if ((time_usec - _time_last_airspeed) > _min_obs_interval_us) {
 		airspeedSample airspeed_sample_new;
 		airspeed_sample_new.true_airspeed = true_airspeed;
 		airspeed_sample_new.eas2tas = eas2tas;
@@ -332,7 +332,7 @@ void EstimatorInterface::setRangeData(uint64_t time_usec, float data)
 	}
 
 	// limit data rate to prevent data being lost
-	if (time_usec - _time_last_range > _min_obs_interval_us) {
+	if ((time_usec - _time_last_range) > _min_obs_interval_us) {
 		rangeSample range_sample_new;
 		range_sample_new.rng = data;
 		range_sample_new.time_us = time_usec - _params.range_delay_ms * 1000;
@@ -351,8 +351,8 @@ void EstimatorInterface::setOpticalFlowData(uint64_t time_usec, flow_message *fl
 
 	// Allocate the required buffer size if not previously done
 	// Do not retry if allocation has failed previously
-	if (_flow_buffer.get_length() < _obs_buffer_length) {
-		_flow_buffer_fail = !_flow_buffer.allocate(_obs_buffer_length);
+	if (_flow_buffer.get_length() < _imu_buffer_length) {
+		_flow_buffer_fail = !_flow_buffer.allocate(_imu_buffer_length);
 
 		if (_flow_buffer_fail) {
 			ECL_ERR("EKF optical flow buffer allocation failed");
@@ -361,7 +361,7 @@ void EstimatorInterface::setOpticalFlowData(uint64_t time_usec, flow_message *fl
 	}
 
 	// limit data rate to prevent data being lost
-	if (time_usec - _time_last_optflow > _min_obs_interval_us) {
+	if ((time_usec - _time_last_optflow) > _min_obs_interval_us) {
 		// check if enough integration time and fail if integration time is less than 50%
 		// of min arrival interval because too much data is being lost
 		float delta_time = 1e-6f * (float)flow->dt;
@@ -433,7 +433,7 @@ void EstimatorInterface::setExtVisionData(uint64_t time_usec, ext_vision_message
 	}
 
 	// limit data rate to prevent data being lost
-	if (time_usec - _time_last_ext_vision > _min_obs_interval_us) {
+	if ((time_usec - _time_last_ext_vision) > _min_obs_interval_us) {
 		extVisionSample ev_sample_new;
 		// calculate the system time-stamp for the mid point of the integration period
 		ev_sample_new.time_us = time_usec - _params.ev_delay_ms * 1000;
@@ -471,7 +471,7 @@ void EstimatorInterface::setAuxVelData(uint64_t time_usec, float (&data)[2], flo
 	}
 
 	// limit data rate to prevent data being lost
-	if (time_usec - _time_last_auxvel > _min_obs_interval_us) {
+	if ((time_usec - _time_last_auxvel) > _min_obs_interval_us) {
 
 		auxVelSample auxvel_sample_new;
 		auxvel_sample_new.time_us = time_usec - _params.auxvel_delay_ms * 1000;

@@ -126,7 +126,7 @@ public:
 	void get_covariances(float *covariances);
 
 	// ask estimator for sensor data collection decision and do any preprocessing if required, returns true if not defined
-	bool collect_gps(uint64_t time_usec, struct gps_message *gps);
+	bool collect_gps(const gps_message &gps);
 
 	bool collect_imu(const imuSample &imu);
 
@@ -193,6 +193,9 @@ public:
 
 	// get the estimated terrain vertical position relative to the NED origin
 	void get_terrain_vert_pos(float *ret);
+
+	// get the terrain variance
+	float get_terrain_var() const { return _terrain_var; }
 
 	// get the accerometer bias in m/s/s
 	void get_accel_bias(float bias[3]);
@@ -340,6 +343,7 @@ private:
 	float _last_static_yaw{0.0f};		///< last yaw angle recorded when on ground motion checks were passing (rad)
 	bool _vehicle_at_rest_prev{false};	///< true when the vehicle was at rest the previous time the status was checked
 	bool _mag_yaw_reset_req{false};		///< true when a reset of the yaw using the magnetomer data has been requested
+	bool _mag_decl_cov_reset{false};	///< true after the fuseDeclination() function has been used to modify the earth field covariances after a magnetic field reset event.
 
 	float P[_k_num_states][_k_num_states] {};	///< state covariance matrix
 
@@ -411,11 +415,11 @@ private:
 
 	// Variables used to control activation of post takeoff functionality
 	float _last_on_ground_posD{0.0f};	///< last vertical position when the in_air status was false (m)
-	bool _flt_mag_align_complete{false};	///< true when the in-flight mag field alignment has been completed
 	bool _flt_mag_align_converging{false};	///< true when the in-flight mag field post alignment convergence is being performd
 	uint64_t _flt_mag_align_start_time{0};	///< time that inflight magnetic field alignment started (uSec)
 	uint64_t _time_last_movement{0};	///< last system time that sufficient movement to use 3-axis magnetometer fusion was detected (uSec)
-	float _saved_mag_variance[6] {};	///< magnetic field state variances that have been saved for use at the next initialisation (Gauss**2)
+	float _saved_mag_bf_variance[4] {};	///< magnetic field state variances that have been saved for use at the next initialisation (Gauss**2)
+	float _saved_mag_ef_covmat[2][2] {};    ///< NE magnetic field state covariance sub-matrix saved for use at the next initialisation (Gauss**2)
 	bool _velpos_reset_request{false};	///< true when a large yaw error has been fixed and a velocity and position state reset is required
 
 	gps_check_fail_status_u _gps_check_fail_status{};
@@ -490,7 +494,11 @@ private:
 	bool resetGpsAntYaw();
 
 	// fuse magnetometer declination measurement
-	void fuseDeclination();
+	// argument passed in is the declination uncertainty in radians
+	void fuseDeclination(float decl_sigma);
+
+	// apply sensible limits to the declination and length of the NE mag field states estimates
+	void limitDeclination();
 
 	// fuse airspeed measurement
 	void fuseAirspeed();
@@ -570,7 +578,7 @@ private:
 	void calcEarthRateNED(Vector3f &omega, float lat_rad) const;
 
 	// return true id the GPS quality is good enough to set an origin and start aiding
-	bool gps_is_good(struct gps_message *gps);
+	bool gps_is_good(const gps_message &gps);
 
 	// Control the filter fusion modes
 	void controlFusionModes();
@@ -668,5 +676,15 @@ private:
 
 	// check that the range finder data is continuous
 	void checkRangeDataContinuity();
+
+	// Increase the yaw error variance of the quaternions
+	// Argument is additional yaw variance in rad**2
+	void increaseQuatYawErrVariance(float yaw_variance);
+
+	// save mag field state covariance data for re-use
+	void save_mag_cov_data();
+
+	// uncorrelate quaternion states from other states
+	void uncorrelateQuatStates();
 
 };

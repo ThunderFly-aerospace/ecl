@@ -41,10 +41,10 @@
 
 #pragma once
 
+#include <ecl.h>
 #include "common.h"
 #include "RingBuffer.h"
 
-#include <ecl.h>
 #include <geo/geo.h>
 #include <matrix/math.hpp>
 #include <mathlib/mathlib.h>
@@ -169,7 +169,7 @@ public:
 	virtual void get_ekf_ctrl_limits(float *vxy_max, float *vz_max, float *hagl_min, float *hagl_max) = 0;
 
 	// ask estimator for sensor data collection decision and do any preprocessing if required, returns true if not defined
-	virtual bool collect_gps(uint64_t time_usec, struct gps_message *gps) { return true; }
+	virtual bool collect_gps(const gps_message &gps) = 0;
 
 	// accumulate and downsample IMU data to the EKF prediction rate
 	virtual bool collect_imu(const imuSample &imu) = 0;
@@ -184,7 +184,7 @@ public:
 	void setMagData(uint64_t time_usec, float (&data)[3]);
 
 	// set gps data
-	void setGpsData(uint64_t time_usec, struct gps_message *gps);
+	void setGpsData(uint64_t time_usec, const gps_message &gps);
 
 	// set baro data
 	void setBaroData(uint64_t time_usec, float data);
@@ -552,6 +552,8 @@ protected:
 
 	float _mag_declination_gps{0.0f};         // magnetic declination returned by the geo library using the last valid GPS position (rad)
 	float _mag_declination_to_save_deg{0.0f}; // magnetic declination to save to EKF2_MAG_DECL (deg)
+	float _mag_inclination_gps{0.0f};	  // magnetic inclination returned by the geo library using the last valid GPS position (rad)
+	float _mag_strength_gps{0.0f};	          // magnetic strength returned by the geo library using the last valid GPS position (T)
 
 	// this is the current status of the filter control modes
 	filter_control_status_u _control_status{};
