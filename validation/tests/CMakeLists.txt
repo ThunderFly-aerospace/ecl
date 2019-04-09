@@ -1,6 +1,6 @@
 ############################################################################
 #
-#   Copyright (c) 2018 ECL Development Team. All rights reserved.
+#   Copyright (c) 2019 ECL Development Team. All rights reserved.
 #
 # Redistribution and use in source and binary forms, with or without
 # modification, are permitted provided that the following conditions
@@ -31,16 +31,16 @@
 #
 ############################################################################
 
-add_library(ecl_validation
-	data_validator.cpp
-	data_validator_group.cpp
-	)
-add_dependencies(ecl_validation prebuild_targets)
-target_compile_definitions(ecl_validation PRIVATE -DMODULE_NAME="ecl/validation")
-target_include_directories(ecl_validation PUBLIC ${ECL_SOURCE_DIR})
+add_executable(ecl_tests_data_validator test_data_validator.cpp tests_common.cpp)
+target_link_libraries(ecl_tests_data_validator ecl_validation)
 
-if(ECL_TESTS)
-	add_definitions(-UNDEBUG) # keep assert
+add_test(NAME ecl_tests_data_validator
+        COMMAND ecl_tests_data_validator
+        )
 
-	add_subdirectory(tests)
-endif()
+add_executable(ecl_tests_data_validator_group  test_data_validator_group.cpp tests_common.cpp)
+target_link_libraries(ecl_tests_data_validator_group ecl_validation)
+
+add_test(NAME ecl_tests_data_validator_group
+        COMMAND ecl_tests_data_validator_group
+        )

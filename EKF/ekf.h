@@ -49,7 +49,7 @@ class Ekf : public EstimatorInterface
 public:
 
 	Ekf() = default;
-	~Ekf() = default;
+	virtual ~Ekf() = default;
 
 	// initialise variables to sane values (also interface class)
 	bool init(uint64_t timestamp);
@@ -122,8 +122,20 @@ public:
 	// get the true airspeed in m/s
 	void get_true_airspeed(float *tas);
 
+	// get the full covariance matrix
+	matrix::SquareMatrix<float, 24> covariances() const { return matrix::SquareMatrix<float, _k_num_states>(P); }
+
 	// get the diagonal elements of the covariance matrix
-	void get_covariances(float *covariances);
+	matrix::Vector<float, 24> covariances_diagonal() const { return covariances().diag(); }
+
+	// get the orientation (quaterion) covariances
+	matrix::SquareMatrix<float, 4> orientation_covariances() const { return covariances().slice<4, 4>(0, 0); }
+
+	// get the linear velocity covariances
+	matrix::SquareMatrix<float, 3> velocity_covariances() const { return covariances().slice<3, 3>(4, 4); }
+
+	// get the position covariances
+	matrix::SquareMatrix<float, 3> position_covariances() const { return covariances().slice<3, 3>(7, 7); }
 
 	// ask estimator for sensor data collection decision and do any preprocessing if required, returns true if not defined
 	bool collect_gps(const gps_message &gps);
@@ -197,7 +209,7 @@ public:
 	// get the terrain variance
 	float get_terrain_var() const { return _terrain_var; }
 
-	// get the accerometer bias in m/s/s
+	// get the accelerometer bias in m/s/s
 	void get_accel_bias(float bias[3]);
 
 	// get the gyroscope bias in rad/s
@@ -237,7 +249,7 @@ public:
 	// status - a bitmask integer containing the pass/fail status for each EKF measurement innovation consistency check
 	// Innovation Test Ratios - these are the ratio of the innovation to the acceptance threshold.
 	// A value > 1 indicates that the sensor measurement has exceeded the maximum acceptable level and has been rejected by the EKF
-	// Where a measurement type is a vector quantity, eg magnetoemter, GPS position, etc, the maximum value is returned.
+	// Where a measurement type is a vector quantity, eg magnetometer, GPS position, etc, the maximum value is returned.
 	void get_innovation_test_status(uint16_t *status, float *mag, float *vel, float *pos, float *hgt, float *tas, float *hagl, float *beta);
 
 	// return a bitmask integer that describes which state estimates can be used for flight control
@@ -280,7 +292,7 @@ private:
 	bool _fuse_vert_vel{false};	///< true when gps vertical velocity measurement should be fused
 	bool _fuse_hor_vel_aux{false};	///< true when auxiliary horizontal velocity measurement should be fused
 
-	float _posObsNoiseNE{0.0f};		///< 1-STD observtion noise used for the fusion of NE position data (m)
+	float _posObsNoiseNE{0.0f};		///< 1-STD observation noise used for the fusion of NE position data (m)
 	float _posInnovGateNE{1.0f};		///< Number of standard deviations used for the NE position fusion innovation consistency check
 
 	Vector2f _velObsVarNE;		///< 1-STD observation noise variance used for the fusion of NE velocity data (m/sec)**2
@@ -326,7 +338,7 @@ private:
 
 	Vector3f _earth_rate_NED;	///< earth rotation vector (NED) in rad/s
 
-	Dcmf _R_to_earth;	///< transformation matrix from body frame to earth frame from last EKF predition
+	Dcmf _R_to_earth;	///< transformation matrix from body frame to earth frame from last EKF prediction
 
 	// used by magnetometer fusion mode selection
 	Vector2f _accel_lpf_NE;			///< Low pass filtered horizontal earth frame acceleration (m/sec**2)
@@ -334,15 +346,15 @@ private:
 	float _yaw_rate_lpf_ef{0.0f};		///< Filtered angular rate about earth frame D axis (rad/sec)
 	bool _mag_bias_observable{false};	///< true when there is enough rotation to make magnetometer bias errors observable
 	bool _yaw_angle_observable{false};	///< true when there is enough horizontal acceleration to make yaw observable
-	uint64_t _time_yaw_started{0};		///< last system time in usec that a yaw rotation moaneouvre was detected
+	uint64_t _time_yaw_started{0};		///< last system time in usec that a yaw rotation manoeuvre was detected
 	uint8_t _num_bad_flight_yaw_events{0};	///< number of times a bad heading has been detected in flight and required a yaw reset
-	uint64_t _mag_use_not_inhibit_us{0};	///< last system time in usec before magnetomer use was inhibited
-	bool _mag_use_inhibit{false};		///< true when magnetomer use is being inhibited
-	bool _mag_use_inhibit_prev{false};	///< true when magnetomer use was being inhibited the previous frame
-	bool _mag_inhibit_yaw_reset_req{false};	///< true when magnetomer inhibit has been active for long enough to require a yaw reset when conditons improve.
+	uint64_t _mag_use_not_inhibit_us{0};	///< last system time in usec before magnetometer use was inhibited
+	bool _mag_use_inhibit{false};		///< true when magnetometer use is being inhibited
+	bool _mag_use_inhibit_prev{false};	///< true when magnetometer use was being inhibited the previous frame
+	bool _mag_inhibit_yaw_reset_req{false};	///< true when magnetometer inhibit has been active for long enough to require a yaw reset when conditions improve.
 	float _last_static_yaw{0.0f};		///< last yaw angle recorded when on ground motion checks were passing (rad)
 	bool _vehicle_at_rest_prev{false};	///< true when the vehicle was at rest the previous time the status was checked
-	bool _mag_yaw_reset_req{false};		///< true when a reset of the yaw using the magnetomer data has been requested
+	bool _mag_yaw_reset_req{false};		///< true when a reset of the yaw using the magnetometer data has been requested
 	bool _mag_decl_cov_reset{false};	///< true after the fuseDeclination() function has been used to modify the earth field covariances after a magnetic field reset event.
 
 	float P[_k_num_states][_k_num_states] {};	///< state covariance matrix
@@ -376,8 +388,6 @@ private:
 	uint64_t _time_good_motion_us{0};	///< last system time that on-ground motion was within limits (uSec)
 	bool _inhibit_flow_use{false};	///< true when use of optical flow and range finder is being inhibited
 	Vector2f _flowRadXYcomp;	///< measured delta angle of the image about the X and Y body axes after removal of body rotation (rad), RH rotation is positive
-
-	float _mag_declination{0.0f};	///< magnetic declination used by reset and fusion functions (rad)
 
 	// output predictor states
 	Vector3f _delta_angle_corr;	///< delta angle correction vector (rad)
@@ -437,7 +447,7 @@ private:
 	float _hagl_innov{0.0f};		///< innovation of the last height above terrain measurement (m)
 	float _hagl_innov_var{0.0f};		///< innovation variance for the last height above terrain measurement (m**2)
 	uint64_t _time_last_hagl_fuse{0};		///< last system time that the hagl measurement failed it's checks (uSec)
-	bool _terrain_initialised{false};	///< true when the terrain estimator has been intialised
+	bool _terrain_initialised{false};	///< true when the terrain estimator has been initialized
 	float _sin_tilt_rng{0.0f};		///< sine of the range finder tilt rotation about the Y body axis
 	float _cos_tilt_rng{0.0f};		///< cosine of the range finder tilt rotation about the Y body axis
 	float _R_rng_to_earth_2_2{0.0f};	///< 2,2 element of the rotation matrix from sensor frame to earth frame
@@ -463,6 +473,8 @@ private:
 	// variables used to check range finder validity data
 	float _rng_stuck_min_val{0.0f};		///< minimum value for new rng measurement when being stuck
 	float _rng_stuck_max_val{0.0f};		///< maximum value for new rng measurement when being stuck
+
+	float _height_rate_lpf{0.0f};
 
 	// update the real time complementary filter states. This includes the prediction
 	// and the correction step
@@ -532,16 +544,16 @@ private:
 	// update the terrain vertical position estimate using a height above ground measurement from the range finder
 	void fuseHagl();
 
-	// reset the heading and magnetic field states using the declination and magnetometer measurements
+	// reset the heading and magnetic field states using the declination and magnetometer/external vision measurements
 	// return true if successful
-	bool resetMagHeading(Vector3f &mag_init);
+	bool resetMagHeading(Vector3f &mag_init, bool increase_yaw_var = true, bool update_buffer=true);
 
 	// Do a forced re-alignment of the yaw angle to align with the horizontal velocity vector from the GPS.
 	// It is used to align the yaw angle after launch or takeoff for fixed wing vehicle.
 	bool realignYawGPS();
 
-	// calculate the magnetic declination to be used by the alignment and fusion processing
-	void calcMagDeclination();
+	// Return the magnetic declination in radians to be used by the alignment and fusion processing
+	float getMagDeclination();
 
 	// reset position states of the ekf (only horizontal position)
 	bool resetPosition();
@@ -586,7 +598,7 @@ private:
 	// control fusion of external vision observations
 	void controlExternalVisionFusion();
 
-	// control fusion of optical flow observtions
+	// control fusion of optical flow observations
 	void controlOpticalFlowFusion();
 
 	// control fusion of GPS observations
@@ -622,7 +634,7 @@ private:
 	// control for combined height fusion mode (implemented for switching between baro and range height)
 	void controlHeightFusion();
 
-	// determine if flight condition is suitable so use range finder instead of the primary height senor
+	// determine if flight condition is suitable so use range finder instead of the primary height sensor
 	void rangeAidConditionsMet();
 
 	// check for "stuck" range finder measurements when rng was not valid for certain period
