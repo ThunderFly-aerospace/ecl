@@ -41,10 +41,10 @@
 
 #pragma once
 
+#include <ecl.h>
 #include "common.h"
 #include "RingBuffer.h"
 
-#include <ecl.h>
 #include <geo/geo.h>
 #include <matrix/math.hpp>
 #include <mathlib/mathlib.h>
@@ -103,8 +103,6 @@ public:
 	virtual void get_wind_velocity_var(float *wind_var) = 0;
 
 	virtual void get_true_airspeed(float *tas) = 0;
-
-	virtual void get_covariances(float *covariances) = 0;
 
 	// gets the variances for the NED velocity states
 	virtual void get_vel_var(Vector3f &vel_var) = 0;
@@ -169,19 +167,22 @@ public:
 	virtual void get_ekf_ctrl_limits(float *vxy_max, float *vz_max, float *hagl_min, float *hagl_max) = 0;
 
 	// ask estimator for sensor data collection decision and do any preprocessing if required, returns true if not defined
-	virtual bool collect_gps(uint64_t time_usec, struct gps_message *gps) { return true; }
+	virtual bool collect_gps(const gps_message &gps) = 0;
 
 	// accumulate and downsample IMU data to the EKF prediction rate
 	virtual bool collect_imu(const imuSample &imu) = 0;
 
 	// set delta angle imu data
+	void setIMUData(const imuSample &imu_sample);
+
+	// legacy interface for compatibility (2018-09-14)
 	void setIMUData(uint64_t time_usec, uint64_t delta_ang_dt, uint64_t delta_vel_dt, float (&delta_ang)[3], float (&delta_vel)[3]);
 
 	// set magnetometer data
 	void setMagData(uint64_t time_usec, float (&data)[3]);
 
 	// set gps data
-	void setGpsData(uint64_t time_usec, struct gps_message *gps);
+	void setGpsData(uint64_t time_usec, const gps_message &gps);
 
 	// set baro data
 	void setBaroData(uint64_t time_usec, float data);
@@ -283,6 +284,8 @@ public:
 		}
 	}
 
+	const matrix::Quatf &get_quaternion() const { return _output_new.quat_nominal; }
+
 	// return the quaternion defining the rotation from the EKF to the External Vision reference frame
 	virtual void get_ekf2ev_quaternion(float *quat) = 0;
 
@@ -332,8 +335,14 @@ public:
 	// At the next startup, set param.mag_declination_deg to the value saved
 	bool get_mag_decl_deg(float *val)
 	{
-		*val = _mag_declination_to_save_deg;
-		return _NED_origin_initialised && (_params.mag_declination_source & MASK_SAVE_GEO_DECL);
+		*val = 0.0f;
+		if (_NED_origin_initialised && (_params.mag_declination_source & MASK_SAVE_GEO_DECL)) {
+			*val = math::degrees(_mag_declination_gps);
+			return true;
+
+		} else {
+			return false;
+		}
 	}
 
 	virtual void get_accel_bias(float bias[3]) = 0;
@@ -373,7 +382,7 @@ public:
 	// status - a bitmask integer containing the pass/fail status for each EKF measurement innovation consistency check
 	// Innovation Test Ratios - these are the ratio of the innovation to the acceptance threshold.
 	// A value > 1 indicates that the sensor measurement has exceeded the maximum acceptable level and has been rejected by the EKF
-	// Where a measurement type is a vector quantity, eg magnetoemter, GPS position, etc, the maximum value is returned.
+	// Where a measurement type is a vector quantity, eg magnetometer, GPS position, etc, the maximum value is returned.
 	virtual void get_innovation_test_status(uint16_t *status, float *mag, float *vel, float *pos, float *hgt, float *tas, float *hagl, float *beta) = 0;
 
 	// return a bitmask integer that describes which state estimates can be used for flight control
@@ -470,6 +479,7 @@ protected:
 	struct map_projection_reference_s _pos_ref {};   // Contains WGS-84 position latitude and longitude (radians) of the EKF origin
 	struct map_projection_reference_s _gps_pos_prev {};   // Contains WGS-84 position latitude and longitude (radians) of the previous GPS message
 	float _gps_alt_prev{0.0f};	// height from the previous GPS message (m)
+	float _gps_yaw_offset{0.0f};	// Yaw offset angle for dual GPS antennas used for yaw estimation (radians).
 
 	// innovation consistency check monitoring ratios
 	float _yaw_test_ratio{0.0f};          // yaw innovation consistency check ratio
@@ -478,19 +488,19 @@ protected:
 	float _tas_test_ratio{0.0f};		// tas innovation consistency check ratio
 	float _terr_test_ratio{0.0f};		// height above terrain measurement innovation consistency check ratio
 	float _beta_test_ratio{0.0f};		// sideslip innovation consistency check ratio
-	float _drag_test_ratio[2] {};	// drag innovation cinsistency check ratio
+	float _drag_test_ratio[2] {};	// drag innovation consistency check ratio
 	innovation_fault_status_u _innov_check_fail_status{};
 
 	bool _is_dead_reckoning{false};		// true if we are no longer fusing measurements that constrain horizontal velocity drift
 	bool _deadreckon_time_exceeded{false};	// true if the horizontal nav solution has been deadreckoning for too long and is invalid
-	bool _is_wind_dead_reckoning{false};	// true if we are navigating reliant on wind relative measurements
+	bool _is_wind_dead_reckoning{false};	// true if we are navigationg reliant on wind relative measurements
 
 	// IMU vibration and movement monitoring
 	Vector3f _delta_ang_prev;	// delta angle from the previous IMU measurement
 	Vector3f _delta_vel_prev;	// delta velocity from the previous IMU measurement
 	float _vibe_metrics[3] {};	// IMU vibration metrics
 					// [0] Level of coning vibration in the IMU delta angles (rad^2)
-					// [1] high frequency vibraton level in the IMU delta angle data (rad)
+					// [1] high frequency vibration level in the IMU delta angle data (rad)
 					// [2] high frequency vibration level in the IMU delta velocity data (m/s)
 	float _gps_drift_metrics[3] {};	// Array containing GPS drift metrics
 					// [0] Horizontal position drift rate (m/s)
@@ -538,14 +548,15 @@ protected:
 
 	fault_status_u _fault_status{};
 
-	// allocate data buffers and intialise interface variables
+	// allocate data buffers and initialize interface variables
 	bool initialise_interface(uint64_t timestamp);
 
 	// free buffer memory
 	void unallocate_buffers();
 
 	float _mag_declination_gps{0.0f};         // magnetic declination returned by the geo library using the last valid GPS position (rad)
-	float _mag_declination_to_save_deg{0.0f}; // magnetic declination to save to EKF2_MAG_DECL (deg)
+	float _mag_inclination_gps{0.0f};	  // magnetic inclination returned by the geo library using the last valid GPS position (rad)
+	float _mag_strength_gps{0.0f};	          // magnetic strength returned by the geo library using the last valid GPS position (T)
 
 	// this is the current status of the filter control modes
 	filter_control_status_u _control_status{};

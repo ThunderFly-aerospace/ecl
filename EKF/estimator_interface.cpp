@@ -46,61 +46,53 @@
 #include <mathlib/mathlib.h>
 
 // Accumulate imu data and store to buffer at desired rate
-void EstimatorInterface::setIMUData(uint64_t time_usec, uint64_t delta_ang_dt, uint64_t delta_vel_dt,
-				    float (&delta_ang)[3], float (&delta_vel)[3])
+void EstimatorInterface::setIMUData(const imuSample &imu_sample)
 {
 	if (!_initialised) {
-		init(time_usec);
+		init(imu_sample.time_us);
 		_initialised = true;
 	}
 
-	const float dt = math::constrain((time_usec - _time_last_imu) / 1e6f, 1.0e-4f, 0.02f);
+	const float dt = math::constrain((imu_sample.time_us - _time_last_imu) / 1e6f, 1.0e-4f, 0.02f);
 
-	_time_last_imu = time_usec;
+	_time_last_imu = imu_sample.time_us;
 
 	if (_time_last_imu > 0) {
 		_dt_imu_avg = 0.8f * _dt_imu_avg + 0.2f * dt;
 	}
 
-	imuSample imu_sample_new;
-	imu_sample_new.delta_ang = Vector3f(delta_ang);
-	imu_sample_new.delta_vel = Vector3f(delta_vel);
-	imu_sample_new.delta_ang_dt = delta_ang_dt * 1e-6f;
-	imu_sample_new.delta_vel_dt = delta_vel_dt * 1e-6f;
-	imu_sample_new.time_us = time_usec;
-
 	// calculate a metric which indicates the amount of coning vibration
-	Vector3f temp = cross_product(imu_sample_new.delta_ang, _delta_ang_prev);
+	Vector3f temp = cross_product(imu_sample.delta_ang, _delta_ang_prev);
 	_vibe_metrics[0] = 0.99f * _vibe_metrics[0] + 0.01f * temp.norm();
 
-	// calculate a metric which indiates the amount of high frequency gyro vibration
-	temp = imu_sample_new.delta_ang - _delta_ang_prev;
-	_delta_ang_prev = imu_sample_new.delta_ang;
+	// calculate a metric which indicates the amount of high frequency gyro vibration
+	temp = imu_sample.delta_ang - _delta_ang_prev;
+	_delta_ang_prev = imu_sample.delta_ang;
 	_vibe_metrics[1] = 0.99f * _vibe_metrics[1] + 0.01f * temp.norm();
 
-	// calculate a metric which indicates the amount of high fequency accelerometer vibration
-	temp = imu_sample_new.delta_vel - _delta_vel_prev;
-	_delta_vel_prev = imu_sample_new.delta_vel;
+	// calculate a metric which indicates the amount of high frequency accelerometer vibration
+	temp = imu_sample.delta_vel - _delta_vel_prev;
+	_delta_vel_prev = imu_sample.delta_vel;
 	_vibe_metrics[2] = 0.99f * _vibe_metrics[2] + 0.01f * temp.norm();
 
 	// detect if the vehicle is not moving when on ground
 	if (!_control_status.flags.in_air) {
 		if ((_vibe_metrics[1] * 4.0E4f > _params.is_moving_scaler)
 				|| (_vibe_metrics[2] * 2.1E2f > _params.is_moving_scaler)
-				|| ((imu_sample_new.delta_ang.norm() / dt) > 0.05f * _params.is_moving_scaler)) {
+				|| ((imu_sample.delta_ang.norm() / dt) > 0.05f * _params.is_moving_scaler)) {
 
-			_time_last_move_detect_us = imu_sample_new.time_us;
+			_time_last_move_detect_us = imu_sample.time_us;
 		}
 
-		_vehicle_at_rest = ((imu_sample_new.time_us - _time_last_move_detect_us) > (uint64_t)1E6);
+		_vehicle_at_rest = ((imu_sample.time_us - _time_last_move_detect_us) > (uint64_t)1E6);
 
 	} else {
-		_time_last_move_detect_us = imu_sample_new.time_us;
+		_time_last_move_detect_us = imu_sample.time_us;
 		_vehicle_at_rest = false;
 	}
 
 	// accumulate and down-sample imu data and push to the buffer when new downsampled data becomes available
-	if (collect_imu(imu_sample_new)) {
+	if (collect_imu(imu_sample)) {
 
 		// down-sample the drag specific force data by accumulating and calculating the mean when
 		// sufficient samples have been collected
@@ -119,10 +111,10 @@ void EstimatorInterface::setIMUData(uint64_t time_usec, uint64_t delta_ang_dt, u
 
 			_drag_sample_count ++;
 			// note acceleration is accumulated as a delta velocity
-			_drag_down_sampled.accelXY(0) += imu_sample_new.delta_vel(0);
-			_drag_down_sampled.accelXY(1) += imu_sample_new.delta_vel(1);
-			_drag_down_sampled.time_us += imu_sample_new.time_us;
-			_drag_sample_time_dt += imu_sample_new.delta_vel_dt;
+			_drag_down_sampled.accelXY(0) += imu_sample.delta_vel(0);
+			_drag_down_sampled.accelXY(1) += imu_sample.delta_vel(1);
+			_drag_down_sampled.time_us += imu_sample.time_us;
+			_drag_sample_time_dt += imu_sample.delta_vel_dt;
 
 			// calculate the downsample ratio for drag specific force data
 			uint8_t min_sample_ratio = (uint8_t) ceilf((float)_imu_buffer_length / _obs_buffer_length);
@@ -151,6 +143,21 @@ void EstimatorInterface::setIMUData(uint64_t time_usec, uint64_t delta_ang_dt, u
 	}
 }
 
+void EstimatorInterface::setIMUData(uint64_t time_usec, uint64_t delta_ang_dt, uint64_t delta_vel_dt,
+				    float (&delta_ang)[3], float (&delta_vel)[3])
+{
+	imuSample imu_sample_new;
+	imu_sample_new.delta_ang = Vector3f(delta_ang);
+	imu_sample_new.delta_vel = Vector3f(delta_vel);
+
+	// convert time from us to secs
+	imu_sample_new.delta_ang_dt = delta_ang_dt / 1e6f;
+	imu_sample_new.delta_vel_dt = delta_vel_dt / 1e6f;
+	imu_sample_new.time_us = time_usec;
+
+	setIMUData(imu_sample_new);
+}
+
 void EstimatorInterface::setMagData(uint64_t time_usec, float (&data)[3])
 {
 	if (!_initialised || _mag_buffer_fail) {
@@ -169,7 +176,7 @@ void EstimatorInterface::setMagData(uint64_t time_usec, float (&data)[3])
 	}
 
 	// limit data rate to prevent data being lost
-	if (time_usec - _time_last_mag > _min_obs_interval_us) {
+	if ((time_usec - _time_last_mag) > _min_obs_interval_us) {
 
 		magSample mag_sample_new;
 		mag_sample_new.time_us = time_usec - _params.mag_delay_ms * 1000;
@@ -183,7 +190,7 @@ void EstimatorInterface::setMagData(uint64_t time_usec, float (&data)[3])
 	}
 }
 
-void EstimatorInterface::setGpsData(uint64_t time_usec, struct gps_message *gps)
+void EstimatorInterface::setGpsData(uint64_t time_usec, const gps_message &gps)
 {
 	if (!_initialised || _gps_buffer_fail) {
 		return;
@@ -203,28 +210,35 @@ void EstimatorInterface::setGpsData(uint64_t time_usec, struct gps_message *gps)
 	// limit data rate to prevent data being lost
 	bool need_gps = (_params.fusion_mode & MASK_USE_GPS) || (_params.vdist_sensor_type == VDIST_SENSOR_GPS);
 
-	if (((time_usec - _time_last_gps) > _min_obs_interval_us) && need_gps && gps->fix_type > 2) {
+	if (((time_usec - _time_last_gps) > _min_obs_interval_us) && need_gps && gps.fix_type > 2) {
 		gpsSample gps_sample_new;
-		gps_sample_new.time_us = gps->time_usec - _params.gps_delay_ms * 1000;
+		gps_sample_new.time_us = gps.time_usec - _params.gps_delay_ms * 1000;
 
 		gps_sample_new.time_us -= FILTER_UPDATE_PERIOD_MS * 1000 / 2;
 		_time_last_gps = time_usec;
 
 		gps_sample_new.time_us = math::max(gps_sample_new.time_us, _imu_sample_delayed.time_us);
-		gps_sample_new.vel = Vector3f(gps->vel_ned);
+		gps_sample_new.vel = Vector3f(gps.vel_ned);
 
-		_gps_speed_valid = gps->vel_ned_valid;
-		gps_sample_new.sacc = gps->sacc;
-		gps_sample_new.hacc = gps->eph;
-		gps_sample_new.vacc = gps->epv;
+		_gps_speed_valid = gps.vel_ned_valid;
+		gps_sample_new.sacc = gps.sacc;
+		gps_sample_new.hacc = gps.eph;
+		gps_sample_new.vacc = gps.epv;
 
-		gps_sample_new.hgt = (float)gps->alt * 1e-3f;
+		gps_sample_new.hgt = (float)gps.alt * 1e-3f;
+
+		gps_sample_new.yaw = gps.yaw;
+		if (ISFINITE(gps.yaw_offset)) {
+			_gps_yaw_offset = gps.yaw_offset;
+		} else {
+			_gps_yaw_offset = 0.0f;
+		}
 
 		// Only calculate the relative position if the WGS-84 location of the origin is set
-		if (collect_gps(time_usec, gps)) {
+		if (collect_gps(gps)) {
 			float lpos_x = 0.0f;
 			float lpos_y = 0.0f;
-			map_projection_project(&_pos_ref, (gps->lat / 1.0e7), (gps->lon / 1.0e7), &lpos_x, &lpos_y);
+			map_projection_project(&_pos_ref, (gps.lat / 1.0e7), (gps.lon / 1.0e7), &lpos_x, &lpos_y);
 			gps_sample_new.pos(0) = lpos_x;
 			gps_sample_new.pos(1) = lpos_y;
 
@@ -255,7 +269,7 @@ void EstimatorInterface::setBaroData(uint64_t time_usec, float data)
 	}
 
 	// limit data rate to prevent data being lost
-	if (time_usec - _time_last_baro > _min_obs_interval_us) {
+	if ((time_usec - _time_last_baro) > _min_obs_interval_us) {
 
 		baroSample baro_sample_new;
 		baro_sample_new.hgt = data;
@@ -288,12 +302,12 @@ void EstimatorInterface::setAirspeedData(uint64_t time_usec, float true_airspeed
 	}
 
 	// limit data rate to prevent data being lost
-	if (time_usec - _time_last_airspeed > _min_obs_interval_us) {
+	if ((time_usec - _time_last_airspeed) > _min_obs_interval_us) {
 		airspeedSample airspeed_sample_new;
 		airspeed_sample_new.true_airspeed = true_airspeed;
 		airspeed_sample_new.eas2tas = eas2tas;
 		airspeed_sample_new.time_us = time_usec - _params.airspeed_delay_ms * 1000;
-		airspeed_sample_new.time_us -= FILTER_UPDATE_PERIOD_MS * 1000 / 2; //typo PeRRiod
+		airspeed_sample_new.time_us -= FILTER_UPDATE_PERIOD_MS * 1000 / 2;
 		_time_last_airspeed = time_usec;
 
 		_airspeed_buffer.push(airspeed_sample_new);
@@ -318,7 +332,7 @@ void EstimatorInterface::setRangeData(uint64_t time_usec, float data)
 	}
 
 	// limit data rate to prevent data being lost
-	if (time_usec - _time_last_range > _min_obs_interval_us) {
+	if ((time_usec - _time_last_range) > _min_obs_interval_us) {
 		rangeSample range_sample_new;
 		range_sample_new.rng = data;
 		range_sample_new.time_us = time_usec - _params.range_delay_ms * 1000;
@@ -337,8 +351,8 @@ void EstimatorInterface::setOpticalFlowData(uint64_t time_usec, flow_message *fl
 
 	// Allocate the required buffer size if not previously done
 	// Do not retry if allocation has failed previously
-	if (_flow_buffer.get_length() < _obs_buffer_length) {
-		_flow_buffer_fail = !_flow_buffer.allocate(_obs_buffer_length);
+	if (_flow_buffer.get_length() < _imu_buffer_length) {
+		_flow_buffer_fail = !_flow_buffer.allocate(_imu_buffer_length);
 
 		if (_flow_buffer_fail) {
 			ECL_ERR("EKF optical flow buffer allocation failed");
@@ -347,7 +361,7 @@ void EstimatorInterface::setOpticalFlowData(uint64_t time_usec, flow_message *fl
 	}
 
 	// limit data rate to prevent data being lost
-	if (time_usec - _time_last_optflow > _min_obs_interval_us) {
+	if ((time_usec - _time_last_optflow) > _min_obs_interval_us) {
 		// check if enough integration time and fail if integration time is less than 50%
 		// of min arrival interval because too much data is being lost
 		float delta_time = 1e-6f * (float)flow->dt;
@@ -355,7 +369,7 @@ void EstimatorInterface::setOpticalFlowData(uint64_t time_usec, flow_message *fl
 		bool delta_time_good = delta_time >= delta_time_min;
 
 		if (!delta_time_good) {
-			// protect against overflow casued by division with very small delta_time
+			// protect against overflow caused by division with very small delta_time
 			delta_time = delta_time_min;
 		}
 
@@ -375,7 +389,7 @@ void EstimatorInterface::setOpticalFlowData(uint64_t time_usec, flow_message *fl
 		bool flow_quality_good = (flow->quality >= _params.flow_qual_min);
 
 		// Check data validity and write to buffers
-		// Use a zero velocity assumption to constrain drift when on-ground if necessary
+		// Invalid flow data is allowed when on ground and is handled as a special case in controlOpticalFlowFusion()
 		bool use_flow_data_to_navigate = delta_time_good && flow_quality_good && (flow_magnitude_good || relying_on_flow);
 		if (use_flow_data_to_navigate || (!_control_status.flags.in_air && relying_on_flow)) {
 			flowSample optflow_sample_new;
@@ -389,16 +403,7 @@ void EstimatorInterface::setOpticalFlowData(uint64_t time_usec, flow_message *fl
 			// NOTE: the EKF uses the reverse sign convention to the flow sensor. EKF assumes positive LOS rate
 			// is produced by a RH rotation of the image about the sensor axis.
 			optflow_sample_new.gyroXYZ = - flow->gyrodata;
-
-			// If flow quality checks are failed, then we are on ground without another method of navigation
-			// and can use a zero velocity assumption to constrain drift
-			if (!use_flow_data_to_navigate) {
-				// set flow rates to value consistent with pure rotational motion
-				optflow_sample_new.flowRadXY(0) = - flow->gyrodata(0);
-				optflow_sample_new.flowRadXY(1) = - flow->gyrodata(1);
-			} else {
-				optflow_sample_new.flowRadXY = -flow->flowdata;
-			}
+			optflow_sample_new.flowRadXY = -flow->flowdata;
 
 			// convert integration interval to seconds
 			optflow_sample_new.dt = delta_time;
@@ -428,7 +433,7 @@ void EstimatorInterface::setExtVisionData(uint64_t time_usec, ext_vision_message
 	}
 
 	// limit data rate to prevent data being lost
-	if (time_usec - _time_last_ext_vision > _min_obs_interval_us) {
+	if ((time_usec - _time_last_ext_vision) > _min_obs_interval_us) {
 		extVisionSample ev_sample_new;
 		// calculate the system time-stamp for the mid point of the integration period
 		ev_sample_new.time_us = time_usec - _params.ev_delay_ms * 1000;
@@ -436,6 +441,7 @@ void EstimatorInterface::setExtVisionData(uint64_t time_usec, ext_vision_message
 		// copy required data
 		ev_sample_new.angErr = evdata->angErr;
 		ev_sample_new.posErr = evdata->posErr;
+		ev_sample_new.hgtErr = evdata->hgtErr;
 		ev_sample_new.quat = evdata->quat;
 		ev_sample_new.posNED = evdata->posNED;
 
@@ -465,7 +471,7 @@ void EstimatorInterface::setAuxVelData(uint64_t time_usec, float (&data)[2], flo
 	}
 
 	// limit data rate to prevent data being lost
-	if (time_usec - _time_last_auxvel > _min_obs_interval_us) {
+	if ((time_usec - _time_last_auxvel) > _min_obs_interval_us) {
 
 		auxVelSample auxvel_sample_new;
 		auxvel_sample_new.time_us = time_usec - _params.auxvel_delay_ms * 1000;
@@ -495,7 +501,7 @@ bool EstimatorInterface::initialise_interface(uint64_t timestamp)
 	// calculate the IMU buffer length required to accomodate the maximum delay with some allowance for jitter
 	_imu_buffer_length = (max_time_delay_ms / FILTER_UPDATE_PERIOD_MS) + 1;
 
-	// set the observaton buffer length to handle the minimum time of arrival between observations in combination
+	// set the observation buffer length to handle the minimum time of arrival between observations in combination
 	// with the worst case delay from current time to ekf fusion time
 	// allow for worst case 50% extension of the ekf fusion time horizon delay due to timing jitter
 	uint16_t ekf_delay_ms = max_time_delay_ms + (int)(ceilf((float)max_time_delay_ms * 0.5f));

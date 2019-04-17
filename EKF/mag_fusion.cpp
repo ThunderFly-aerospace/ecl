@@ -377,7 +377,7 @@ void Ekf::fuseMag()
 		}
 
 		// if the covariance correction will result in a negative variance, then
-		// the covariance marix is unhealthy and must be corrected
+		// the covariance matrix is unhealthy and must be corrected
 		_fault_status.flags.bad_mag_x = false;
 		_fault_status.flags.bad_mag_y = false;
 		_fault_status.flags.bad_mag_z = false;
@@ -404,7 +404,7 @@ void Ekf::fuseMag()
 			}
 		}
 
-		// only apply covariance and state corrrections if healthy
+		// only apply covariance and state corrections if healthy
 		if (healthy) {
 			// apply the covariance corrections
 			for (unsigned row = 0; row < _k_num_states; row++) {
@@ -413,12 +413,14 @@ void Ekf::fuseMag()
 				}
 			}
 
-			// correct the covariance marix for gross errors
+			// correct the covariance matrix for gross errors
 			fixCovarianceErrors();
 
 			// apply the state corrections
 			fuse(Kfusion, _mag_innov[index]);
 
+			// constrain the declination of the earth field states
+			limitDeclination();
 		}
 	}
 }
@@ -489,7 +491,7 @@ void Ekf::fuseHeading()
 			}
 
 			// the angle of the projection onto the horizontal gives the yaw angle
-			measured_hdg = -atan2f(mag_earth_pred(1), mag_earth_pred(0)) + _mag_declination;
+			measured_hdg = -atan2f(mag_earth_pred(1), mag_earth_pred(0)) + getMagDeclination();
 
 		} else if (_control_status.flags.ev_yaw) {
 			// calculate the yaw angle for a 321 sequence
@@ -504,7 +506,7 @@ void Ekf::fuseHeading()
 		}
 
 	} else {
-		// calculate observaton jacobian when we are observing a rotation in a 312 sequence
+		// calculate observation jacobian when we are observing a rotation in a 312 sequence
 		float t9 = q0*q3;
 		float t10 = q1*q2;
 		float t2 = t9-t10;
@@ -582,7 +584,7 @@ void Ekf::fuseHeading()
 			}
 
 			// the angle of the projection onto the horizontal gives the yaw angle
-			measured_hdg = -atan2f(mag_earth_pred(1), mag_earth_pred(0)) + _mag_declination;
+			measured_hdg = -atan2f(mag_earth_pred(1), mag_earth_pred(0)) + getMagDeclination();
 
 		} else if (_control_status.flags.ev_yaw) {
 			// calculate the yaw angle for a 312 sequence
@@ -615,18 +617,18 @@ void Ekf::fuseHeading()
 	// wrap the heading to the interval between +-pi
 	measured_hdg = wrap_pi(measured_hdg);
 
-	// calculate the innovation and define the innovaton gate
+	// calculate the innovation and define the innovation gate
 	float innov_gate = math::max(_params.heading_innov_gate, 1.0f);
 	if (_mag_use_inhibit) {
-		// The magnetomer cannot be trusted but we need to fuse a heading to prevent a badly
-		// conditoned covariance matrix developing over time.
+		// The magnetometer cannot be trusted but we need to fuse a heading to prevent a badly
+		// conditioned covariance matrix developing over time.
 		if (!_vehicle_at_rest) {
 			// Vehicle is not at rest so fuse a zero innovation and record the
 			// predicted heading to use as an observation when movement ceases.
 			_heading_innov = 0.0f;
 			_vehicle_at_rest_prev = false;
 		} else {
-			// Vehicle is at rest so use the last moving prediciton as an observation
+			// Vehicle is at rest so use the last moving prediction as an observation
 			// to prevent the heading from drifting and to enable yaw gyro bias learning
 			// before takeoff.
 			if (!_vehicle_at_rest_prev || !_mag_use_inhibit_prev) {
@@ -646,8 +648,8 @@ void Ekf::fuseHeading()
 	// wrap the innovation to the interval between +-pi
 	_heading_innov = wrap_pi(_heading_innov);
 
-	// Calculate innovation variance and Kalman gains, taking advantage of the fact that only the first 3 elements in H are non zero
-	// calculate the innovaton variance
+	// Calculate innovation variance and Kalman gains, taking advantage of the fact that only the first 4 elements in H are non zero
+	// calculate the innovation variance
 	float PH[4];
 	_heading_innov_var = R_YAW;
 
@@ -666,12 +668,12 @@ void Ekf::fuseHeading()
 	// check if the innovation variance calculation is badly conditioned
 	if (_heading_innov_var >= R_YAW) {
 		// the innovation variance contribution from the state covariances is not negative, no fault
-		_fault_status.flags.bad_mag_hdg = false;
+		_fault_status.flags.bad_hdg = false;
 		heading_innov_var_inv = 1.0f / _heading_innov_var;
 
 	} else {
 		// the innovation variance contribution from the state covariances is negative which means the covariance matrix is badly conditioned
-		_fault_status.flags.bad_mag_hdg = true;
+		_fault_status.flags.bad_hdg = true;
 
 		// we reinitialise the covariance matrix and abort this fusion step
 		initialiseCovariance();
@@ -754,9 +756,9 @@ void Ekf::fuseHeading()
 	}
 
 	// if the covariance correction will result in a negative variance, then
-	// the covariance marix is unhealthy and must be corrected
+	// the covariance matrix is unhealthy and must be corrected
 	bool healthy = true;
-	_fault_status.flags.bad_mag_hdg = false;
+	_fault_status.flags.bad_hdg = false;
 
 	for (int i = 0; i < _k_num_states; i++) {
 		if (P[i][i] < KHP[i][i]) {
@@ -768,12 +770,12 @@ void Ekf::fuseHeading()
 			healthy = false;
 
 			// update individual measurement health status
-			_fault_status.flags.bad_mag_hdg = true;
+			_fault_status.flags.bad_hdg = true;
 
 		}
 	}
 
-	// only apply covariance and state corrrections if healthy
+	// only apply covariance and state corrections if healthy
 	if (healthy) {
 		// apply the covariance corrections
 		for (unsigned row = 0; row < _k_num_states; row++) {
@@ -782,7 +784,7 @@ void Ekf::fuseHeading()
 			}
 		}
 
-		// correct the covariance marix for gross errors
+		// correct the covariance matrix for gross errors
 		fixCovarianceErrors();
 
 		// apply the state corrections
@@ -791,20 +793,24 @@ void Ekf::fuseHeading()
 	}
 }
 
-void Ekf::fuseDeclination()
+void Ekf::fuseDeclination(float decl_sigma)
 {
 	// assign intermediate state variables
 	float magN = _state.mag_I(0);
 	float magE = _state.mag_I(1);
 
-	float R_DECL = sq(0.5f);
+	// minimum horizontal field strength before calculation becomes badly conditioned (T)
+	float h_field_min = 0.001f;
+
+	// observation variance (rad**2)
+	float R_DECL = sq(decl_sigma);
 
 	// Calculate intermediate variables
 	float t2 = magE*magE;
 	float t3 = magN*magN;
 	float t4 = t2+t3;
 	// if the horizontal magnetic field is too small, this calculation will be badly conditioned
-	if (t4 < 1e-4f) {
+	if (t4 < h_field_min*h_field_min) {
 		return;
 	}
 	float t5 = P[16][16]*t2;
@@ -867,7 +873,7 @@ void Ekf::fuseDeclination()
 	Kfusion[23] = -t4*t13*(P[23][16]*magE-P[23][17]*magN);
 
 	// calculate innovation and constrain
-	float innovation = atan2f(magE, magN) - _mag_declination;
+	float innovation = atan2f(magE, magN) - getMagDeclination();
 	innovation = math::constrain(innovation, -0.5f, 0.5f);
 
 	// apply covariance correction via P_new = (I -K*H)*P
@@ -889,7 +895,7 @@ void Ekf::fuseDeclination()
 	}
 
 	// if the covariance correction will result in a negative variance, then
-	// the covariance marix is unhealthy and must be corrected
+	// the covariance matrix is unhealthy and must be corrected
 	bool healthy = true;
 	_fault_status.flags.bad_mag_decl = false;
 	for (int i = 0; i < _k_num_states; i++) {
@@ -907,7 +913,7 @@ void Ekf::fuseDeclination()
 		}
 	}
 
-	// only apply covariance and state corrrections if healthy
+	// only apply covariance and state corrections if healthy
 	if (healthy) {
 		// apply the covariance corrections
 		for (unsigned row = 0; row < _k_num_states; row++) {
@@ -916,11 +922,64 @@ void Ekf::fuseDeclination()
 			}
 		}
 
-		// correct the covariance marix for gross errors
+		// correct the covariance matrix for gross errors
 		fixCovarianceErrors();
 
 		// apply the state corrections
 		fuse(Kfusion, innovation);
 
+		// constrain the declination of the earth field states
+		limitDeclination();
+	}
+}
+
+void Ekf::limitDeclination()
+{
+	// get a reference value for the earth field declinaton and minimum plausible horizontal field strength
+	// set to 50% of the horizontal strength from geo tables if location is known
+	float decl_reference;
+	float h_field_min = 0.001f;
+	if (_params.mag_declination_source & MASK_USE_GEO_DECL) {
+		// use parameter value until GPS is available, then use value returned by geo library
+		if (_NED_origin_initialised) {
+			decl_reference = _mag_declination_gps;
+			h_field_min = fmaxf(h_field_min , 0.5f * _mag_strength_gps * cosf(_mag_inclination_gps));
+		} else {
+			decl_reference = math::radians(_params.mag_declination_deg);
+		}
+	} else {
+		// always use the parameter value
+		decl_reference = math::radians(_params.mag_declination_deg);
+	}
+
+	// do not allow the horizontal field length to collapse - this will make the declination fusion badly conditioned
+	// and can result in a reversal of the NE field states which the filter cannot recover from
+	// apply a circular limit
+	float h_field = sqrtf(_state.mag_I(0)*_state.mag_I(0) + _state.mag_I(1)*_state.mag_I(1));
+	if (h_field < h_field_min) {
+		if (h_field > 0.001f * h_field_min) {
+			float h_scaler = h_field_min / h_field;
+			_state.mag_I(0) *= h_scaler;
+			_state.mag_I(1) *= h_scaler;
+		} else {
+			// too small to scale radially so set to expected value
+			float mag_declination = getMagDeclination();
+			_state.mag_I(0) = 2.0f * h_field_min * cosf(mag_declination);
+			_state.mag_I(1) = 2.0f * h_field_min * sinf(mag_declination);
+		}
+		h_field = h_field_min;
+	}
+
+	// do not allow the declination estimate to vary too much relative to the reference value
+	const float decl_tolerance = 0.5f;
+	const float decl_max = decl_reference + decl_tolerance;
+	const float decl_min = decl_reference - decl_tolerance;
+	const float decl_estimate = atan2f(_state.mag_I(1) , _state.mag_I(0));
+	if (decl_estimate > decl_max)  {
+		_state.mag_I(0) = h_field * cosf(decl_max);
+		_state.mag_I(1) = h_field * sinf(decl_max);
+	} else if (decl_estimate < decl_min)  {
+		_state.mag_I(0) = h_field * cosf(decl_min);
+		_state.mag_I(1) = h_field * sinf(decl_min);
 	}
 }

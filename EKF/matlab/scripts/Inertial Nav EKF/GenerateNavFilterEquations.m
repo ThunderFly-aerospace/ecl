@@ -62,7 +62,7 @@ syms R_DECL R_YAW real; % variance of declination or yaw angle observation
 syms BCXinv BCYinv real % inverse of ballistic coefficient for wind relative movement along the x and y  body axes
 syms rho real % air density (kg/m^3)
 syms R_ACC real % variance of accelerometer measurements (m/s^2)^2
-syms Kaccx Kaccy real % derivative of X and Y body specific forces wrt componenent of true airspeed along each axis (1/s)
+syms Kaccx Kaccy real % derivative of X and Y body specific forces wrt component of true airspeed along each axis (1/s)
 
 %% define the state prediction equations
 
@@ -410,6 +410,29 @@ H_YAW312 = jacobian(angMeas,stateVector); % measurement Jacobianclea
 H_YAW312 = simplify(H_YAW312);
 ccode(H_YAW312,'file','calcH_YAW312.c');
 fix_c_code('calcH_YAW312.c');
+
+% reset workspace
+clear all;
+reset(symengine);
+
+%% derive equations for fusion of dual antenna yaw measurement
+load('StatePrediction.mat');
+
+syms ant_yaw real; % yaw angle of antenna array axis wrt X body axis
+
+% define antenna vector in body frame
+ant_vec_bf = [cos(ant_yaw);sin(ant_yaw);0];
+
+% rotate into earth frame
+ant_vec_ef = Tbn * ant_vec_bf;
+
+% Calculate the yaw angle from the projection
+angMeas = atan(ant_vec_ef(2)/ant_vec_ef(1));
+
+H_YAWGPS = jacobian(angMeas,stateVector); % measurement Jacobian
+H_YAWGPS = simplify(H_YAWGPS);
+ccode(H_YAWGPS,'file','calcH_YAWGPS.c');
+fix_c_code('calcH_YAWGPS.c');
 
 % reset workspace
 clear all;

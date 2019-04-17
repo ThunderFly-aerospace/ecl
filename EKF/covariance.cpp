@@ -106,6 +106,9 @@ void Ekf::initialiseCovariance()
 		P[index][index] = sq(_params.mag_noise);
 	}
 
+	// save covariance data for re-use when auto-switching between heading and 3-axis fusion
+	save_mag_cov_data();
+
 	// wind
 	P[22][22] = sq(_params.initial_wind_uncertainty);
 	P[23][23] = sq(_params.initial_wind_uncertainty);
@@ -162,7 +165,7 @@ void Ekf::predictCovariance()
 	// convert rate of change of accelerometer bias (m/s**3) as specified by the parameter to an expected change in delta velocity (m/s) since the last update
 	float d_vel_bias_sig = dt * dt * math::constrain(_params.accel_bias_p_noise, 0.0f, 1.0f);
 
-	// inhibit learning of imu acccel bias if the manoeuvre levels are too high to protect against the effect of sensor nonlinearities or bad accel data is detected
+	// inhibit learning of imu accel bias if the manoeuvre levels are too high to protect against the effect of sensor nonlinearities or bad accel data is detected
 	float alpha = math::constrain((dt / _params.acc_bias_learn_tc), 0.0f, 1.0f);
 	float beta = 1.0f - alpha;
 	_ang_rate_mag_filt = fmaxf(dt_inv * _imu_sample_delayed.delta_ang.norm(), beta * _ang_rate_mag_filt);
@@ -223,9 +226,13 @@ void Ekf::predictCovariance()
 
 	float wind_vel_sig;
 
+	// Calculate low pass filtered height rate
+	float alpha_height_rate_lpf = 0.1f * dt; // 10 seconds time constant
+	_height_rate_lpf = _height_rate_lpf * (1.0f - alpha_height_rate_lpf) + _state.vel(2) * alpha_height_rate_lpf;
+
 	// Don't continue to grow wind velocity state variances if they are becoming too large or we are not using wind velocity states as this can make the covariance matrix badly conditioned
 	if (_control_status.flags.wind && (P[22][22] + P[23][23]) < sq(_params.initial_wind_uncertainty)) {
-		wind_vel_sig = dt * math::constrain(_params.wind_vel_p_noise, 0.0f, 1.0f);
+		wind_vel_sig = dt * math::constrain(_params.wind_vel_p_noise, 0.0f, 1.0f) * (1.0f + _params.wind_vel_p_noise_scaler * fabsf(_height_rate_lpf));
 
 	} else {
 		wind_vel_sig = 0.0f;
@@ -741,10 +748,10 @@ void Ekf::fixCovarianceErrors()
 		P[i][i] = math::constrain(P[i][i], 0.0f, P_lim[3]);
 	}
 
-	// force symmetry on the quaternion, velocity and positon state covariances
+	// force symmetry on the quaternion, velocity and position state covariances
 	makeSymmetrical(P, 0, 12);
 
-	// the following states are optional and are deactivaed when not required
+	// the following states are optional and are deactivated when not required
 	// by ensuring the corresponding covariance matrix values are kept at zero
 
 	// accelerometer bias states
@@ -804,7 +811,7 @@ void Ekf::fixCovarianceErrors()
 			down_dvel_bias += _state.accel_bias(axis_index) * _R_to_earth(2, axis_index);
 		}
 
-		// check that the vertical componenent of accel bias is consistent with both the vertical position and velocity innovation
+		// check that the vertical component of accel bias is consistent with both the vertical position and velocity innovation
 		bool bad_acc_bias = (fabsf(down_dvel_bias) > dVel_bias_lim
 				     && down_dvel_bias * _vel_pos_innov[2] < 0.0f
 				     && down_dvel_bias * _vel_pos_innov[5] < 0.0f);
@@ -884,11 +891,15 @@ void Ekf::resetMagCovariance()
 	// set the magnetic field covariance terms to zero
 	zeroRows(P, 16, 21);
 	zeroCols(P, 16, 21);
+	_mag_decl_cov_reset = false;
 
 	// set the field state variance to the observation variance
 	for (uint8_t rc_index = 16; rc_index <= 21; rc_index ++) {
 		P[rc_index][rc_index] = sq(_params.mag_noise);
 	}
+
+	// save covariance data for re-use when auto-switching between heading and 3-axis fusion
+	save_mag_cov_data();
 }
 
 void Ekf::resetWindCovariance()

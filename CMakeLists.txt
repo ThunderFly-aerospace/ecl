@@ -68,7 +68,7 @@ set(CMAKE_EXE_LINKER_FLAGS_COVERAGE
 mark_as_advanced(CMAKE_CXX_FLAGS_COVERAGE CMAKE_C_FLAGS_COVERAGE CMAKE_EXE_LINKER_FLAGS_COVERAGE)
 
 
-set(ECL_SOURCE_DIR ${CMAKE_CURRENT_SOURCE_DIR} CACHE string "ECL source location" FORCE)
+set(ECL_SOURCE_DIR ${CMAKE_CURRENT_SOURCE_DIR} CACHE STRING "ECL source location" FORCE)
 
 if(CMAKE_SOURCE_DIR STREQUAL PROJECT_SOURCE_DIR)
 	# ECL standalone build
@@ -95,7 +95,6 @@ if(CMAKE_SOURCE_DIR STREQUAL PROJECT_SOURCE_DIR)
 			-Wextra
 			-Werror
 
-			-Wno-unused-parameter
 			-Wno-missing-field-initializers # ignore for GCC 4.8 support
 		)
 	endif()
@@ -105,6 +104,7 @@ if(CMAKE_SOURCE_DIR STREQUAL PROJECT_SOURCE_DIR)
 	enable_testing()
 	
 	if(BUILD_TESTING)
+		option(ECL_TESTS "Build ECL tests" ON)
 
 		add_custom_target(check
 			COMMAND ${CMAKE_CTEST_COMMAND} --output-on-failure -C Debug
@@ -124,6 +124,7 @@ if(CMAKE_SOURCE_DIR STREQUAL PROJECT_SOURCE_DIR)
 	include(ExternalProject)
 	ExternalProject_Add(matrix
 			GIT_REPOSITORY "https://github.com/PX4/Matrix.git"
+			GIT_TAG 6b0777d815cd64902eb0575d56ec52f53aebb4a0
 			UPDATE_COMMAND ""
 			PATCH_COMMAND ""
 			CONFIGURE_COMMAND ""
@@ -158,6 +159,7 @@ endif()
 
 add_subdirectory(airdata)
 add_subdirectory(attitude_fw)
+add_subdirectory(attitude_rw)
 add_subdirectory(EKF)
 add_subdirectory(geo)
 add_subdirectory(geo_lookup)

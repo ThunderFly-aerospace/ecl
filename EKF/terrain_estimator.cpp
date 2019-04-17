@@ -61,7 +61,7 @@ bool Ekf::initHagl()
 		_terrain_vpos = _state.pos(2) + _params.rng_gnd_clearance;
 		// Use the ground clearance value as our uncertainty
 		_terrain_var = sq(_params.rng_gnd_clearance);
-		// ths is a guess
+		// this is a guess
 		return false;
 
 	} else {
@@ -128,7 +128,7 @@ void Ekf::fuseHagl()
 		_hagl_innov = pred_hagl - meas_hagl;
 
 		// calculate the observation variance adding the variance of the vehicles own height uncertainty
-		float obs_variance = fmaxf(P[9][9], 0.0f) + sq(_params.range_noise) + sq(_params.range_noise_scaler * _range_sample_delayed.rng);
+		float obs_variance = fmaxf(P[9][9] * _params.vehicle_variance_scaler, 0.0f) + sq(_params.range_noise) + sq(_params.range_noise_scaler * _range_sample_delayed.rng);
 
 		// calculate the innovation variance - limiting it to prevent a badly conditioned fusion
 		_hagl_innov_var = fmaxf(_terrain_var + obs_variance, obs_variance);
@@ -149,7 +149,7 @@ void Ekf::fuseHagl()
 			_innov_check_fail_status.flags.reject_hagl = false;
 		} else {
 			// If we have been rejecting range data for too long, reset to measurement
-			if (_time_last_imu - _time_last_hagl_fuse > (uint64_t)10E6) {
+			if ((_time_last_imu - _time_last_hagl_fuse) > (uint64_t)10E6) {
 				_terrain_vpos = _state.pos(2) + meas_hagl;
 				_terrain_var = obs_variance;
 			} else {
@@ -171,7 +171,7 @@ bool Ekf::get_terrain_valid()
 // determine terrain validity
 void Ekf::update_terrain_valid()
 {
-	if (_terrain_initialised && (_time_last_imu - _time_last_hagl_fuse < (uint64_t)5e6)) {
+	if (_terrain_initialised && ((_time_last_imu - _time_last_hagl_fuse) < (uint64_t)5e6)) {
 
 		_hagl_valid = true;
 
