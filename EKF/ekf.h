@@ -261,6 +261,9 @@ public:
 	// use the latest IMU data at the current time horizon.
 	Quatf calculate_quaternion() const;
 
+	// set minimum continuous period without GPS fail required to mark a healthy GPS status
+	void set_min_required_gps_health_time(uint32_t time_us) { _min_gps_health_time_us = time_us; }
+
 private:
 
 	static constexpr uint8_t _k_num_states{24};		///< number of EKF states
@@ -315,6 +318,7 @@ private:
 	bool _flow_data_ready{false};	///< true when the leading edge of the optical flow integration period has fallen behind the fusion time horizon
 	bool _ev_data_ready{false};	///< true when new external vision system data has fallen behind the fusion time horizon and is available to be fused
 	bool _tas_data_ready{false};	///< true when new true airspeed data has fallen behind the fusion time horizon and is available to be fused
+	bool _flow_for_terrain_data_ready{false}; /// same flag as "_flow_data_ready" but used for separate terrain estimator
 
 	uint64_t _time_last_fake_gps{0};	///< last time we faked GPS position measurements to constrain tilt errors during operation without external aiding (uSec)
 	uint64_t _time_ins_deadreckon_start{0};	///< amount of time we have been doing inertial only deadreckoning (uSec)
@@ -407,6 +411,7 @@ private:
 	uint64_t _last_gps_fail_us{0};		///< last system time in usec that the GPS failed it's checks
 	uint64_t _last_gps_pass_us{0};		///< last system time in usec that the GPS passed it's checks
 	float _gps_error_norm{1.0f};		///< normalised gps error
+	uint32_t _min_gps_health_time_us{10000000}; ///< GPS is marked as healthy only after this amount of time
 
 	// Variables used to publish the WGS-84 location of the EKF local NED origin
 	uint64_t _last_gps_origin_time_us{0};	///< time the origin was last set (uSec)
@@ -543,6 +548,9 @@ private:
 
 	// update the terrain vertical position estimate using a height above ground measurement from the range finder
 	void fuseHagl();
+
+	// update the terrain vertical position estimate using an optical flow measurement
+	void fuseFlowForTerrain();
 
 	// reset the heading and magnetic field states using the declination and magnetometer/external vision measurements
 	// return true if successful
