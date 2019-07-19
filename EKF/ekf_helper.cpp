@@ -378,8 +378,8 @@ void Ekf::resetHeight()
 // align output filter states to match EKF states at the fusion time horizon
 void Ekf::alignOutputFilter()
 {
-	// calculate the quaternion delta between the output and EKF quaternions at the EKF fusion time horizon
-	Quatf q_delta = _output_sample_delayed.quat_nominal.inversed() *  _state.quat_nominal;
+	// calculate the quaternion rotation delta from the EKF to output observer states at the EKF fusion time horizon
+	Quatf q_delta = _state.quat_nominal * _output_sample_delayed.quat_nominal.inversed();
 	q_delta.normalize();
 
 	// calculate the velocity and position deltas between the output and EKF at the EKF fusion time horizon
@@ -388,16 +388,16 @@ void Ekf::alignOutputFilter()
 
 	// loop through the output filter state history and add the deltas
 	for (uint8_t i = 0; i < _output_buffer.get_length(); i++) {
-		_output_buffer[i].quat_nominal *= q_delta;
+		_output_buffer[i].quat_nominal = q_delta * _output_buffer[i].quat_nominal;
 		_output_buffer[i].quat_nominal.normalize();
 		_output_buffer[i].vel += vel_delta;
 		_output_buffer[i].pos += pos_delta;
 	}
 
-	_output_new.quat_nominal *= q_delta;
+	_output_new.quat_nominal = q_delta * _output_new.quat_nominal;
 	_output_new.quat_nominal.normalize();
 
-	_output_sample_delayed.quat_nominal *= q_delta;
+	_output_sample_delayed.quat_nominal = q_delta * _output_sample_delayed.quat_nominal;
 	_output_sample_delayed.quat_nominal.normalize();
 }
 
@@ -506,12 +506,11 @@ bool Ekf::realignYawGPS()
 			_flt_mag_align_start_time = _imu_sample_delayed.time_us;
 
 			// calculate the amount that the quaternion has changed by
-			_state_reset_status.quat_change = quat_before_reset.inversed() * _state.quat_nominal;
+			_state_reset_status.quat_change = _state.quat_nominal * quat_before_reset.inversed();
 
 			// add the reset amount to the output observer buffered data
-			// Note q1 *= q2 is equivalent to q1 = q2 * q1
 			for (uint8_t i = 0; i < _output_buffer.get_length(); i++) {
-				_output_buffer[i].quat_nominal *= _state_reset_status.quat_change;
+				_output_buffer[i].quat_nominal = _state_reset_status.quat_change * _output_buffer[i].quat_nominal;
 			}
 
 			// apply the change in attitude quaternion to our newest quaternion estimate
@@ -718,7 +717,7 @@ bool Ekf::resetMagHeading(Vector3f &mag_init, bool increase_yaw_var, bool update
 	_flt_mag_align_start_time = _imu_sample_delayed.time_us;
 
 	// calculate the amount that the quaternion has changed by
-	Quatf q_error =  quat_before_reset.inversed() * quat_after_reset;
+	Quatf q_error =  quat_after_reset * quat_before_reset.inversed();
 	q_error.normalize();
 
 	// update quaternion states
@@ -750,8 +749,7 @@ bool Ekf::resetMagHeading(Vector3f &mag_init, bool increase_yaw_var, bool update
 	if (update_buffer) {
 		// add the reset amount to the output observer buffered data
 		for (uint8_t i = 0; i < _output_buffer.get_length(); i++) {
-			// Note q1 *= q2 is equivalent to q1 = q2 * q1
-			_output_buffer[i].quat_nominal *= _state_reset_status.quat_change;
+			_output_buffer[i].quat_nominal = _state_reset_status.quat_change * _output_buffer[i].quat_nominal;
 		}
 
 		// apply the change in attitude quaternion to our newest quaternion estimate
@@ -1721,4 +1719,12 @@ void Ekf::save_mag_cov_data()
 			_saved_mag_ef_covmat[row][col] = P[row + 16][col + 16];
 		}
 	}
+}
+
+float Ekf::kahanSummation(float sum_previous, float input, float &accumulator) const
+{
+	float y = input - accumulator;
+	float t = sum_previous + y;
+	accumulator = (t - sum_previous) - y;
+	return t;
 }

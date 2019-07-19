@@ -123,10 +123,10 @@ public:
 	virtual void get_drag_innov(float drag_innov[2]) = 0;
 
 	// gets the innovation variance of the HAGL measurement
-	virtual void get_hagl_innov_var(float *flow_innov_var) = 0;
+	virtual void get_hagl_innov_var(float *hagl_innov_var) = 0;
 
 	// gets the innovation of the HAGL measurement
-	virtual void get_hagl_innov(float *flow_innov_var) = 0;
+	virtual void get_hagl_innov(float *hagl_innov) = 0;
 
 	// return an array containing the output predictor angular, velocity and position tracking
 	// error magnitudes (rad), (m/s), (m)
@@ -492,7 +492,7 @@ protected:
 	innovation_fault_status_u _innov_check_fail_status{};
 
 	bool _is_dead_reckoning{false};		// true if we are no longer fusing measurements that constrain horizontal velocity drift
-	bool _deadreckon_time_exceeded{false};	// true if the horizontal nav solution has been deadreckoning for too long and is invalid
+	bool _deadreckon_time_exceeded{true};	// true if the horizontal nav solution has been deadreckoning for too long and is invalid
 	bool _is_wind_dead_reckoning{false};	// true if we are navigationg reliant on wind relative measurements
 
 	// IMU vibration and movement monitoring
