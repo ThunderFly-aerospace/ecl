@@ -174,7 +174,7 @@ void Ekf::fuseGpsAntYaw()
 
 		// we reinitialise the covariance matrix and abort this fusion step
 		initialiseCovariance();
-		ECL_ERR("EKF GPS yaw fusion numerical error - covariance reset");
+		ECL_ERR_TIMESTAMPED("EKF GPS yaw fusion numerical error - covariance reset");
 		return;
 	}
 
@@ -367,7 +367,7 @@ bool Ekf::resetGpsAntYaw()
 		}
 
 		// calculate the amount that the quaternion has changed by
-		Quatf q_error =  quat_before_reset.inversed() * _state.quat_nominal;
+		Quatf q_error =  _state.quat_nominal * quat_before_reset.inversed();
 		q_error.normalize();
 
 		// convert the quaternion delta to a delta angle
@@ -395,7 +395,7 @@ bool Ekf::resetGpsAntYaw()
 			_state_reset_status.quat_change = q_error;
 
 			// update transformation matrix from body to world frame using the current estimate
-			_R_to_earth = quat_to_invrotmat(_state.quat_nominal);
+			_R_to_earth = Dcmf(_state.quat_nominal);
 
 			// reset the rotation from the EV to EKF frame of reference if it is being used
 			if ((_params.fusion_mode & MASK_ROTATE_EV) && (_params.fusion_mode & MASK_USE_EVPOS)) {
@@ -407,8 +407,7 @@ bool Ekf::resetGpsAntYaw()
 
 			// add the reset amount to the output observer buffered data
 			for (uint8_t i = 0; i < _output_buffer.get_length(); i++) {
-				// Note q1 *= q2 is equivalent to q1 = q2 * q1
-				_output_buffer[i].quat_nominal *= _state_reset_status.quat_change;
+				_output_buffer[i].quat_nominal = _state_reset_status.quat_change * _output_buffer[i].quat_nominal;
 			}
 
 			// apply the change in attitude quaternion to our newest quaternion estimate

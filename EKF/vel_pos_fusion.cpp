@@ -67,8 +67,8 @@ void Ekf::fuseVelPosHeight()
 		}
 
 		// Set observation noise variance and innovation consistency check gate size for the NE position observations
-		R[0] = _velObsVarNE(0);
-		R[1] = _velObsVarNE(1);
+		R[0] = _velObsVarNED(0);
+		R[1] = _velObsVarNED(1);
 		gate_size[1] = gate_size[0] = _hvelInnovGate;
 
 	}
@@ -76,12 +76,12 @@ void Ekf::fuseVelPosHeight()
 	if (_fuse_vert_vel) {
 		fuse_map[2] = true;
 		// observation variance - use receiver reported accuracy with parameter setting the minimum value
-		R[2] = fmaxf(_params.gps_vel_noise, 0.01f);
+		R[2] = _velObsVarNED(2);
 		// use scaled horizontal speed accuracy assuming typical ratio of VDOP/HDOP
 		R[2] = 1.5f * fmaxf(R[2], _gps_sample_delayed.sacc);
 		R[2] = R[2] * R[2];
 		// innovation gate size
-		gate_size[2] = fmaxf(_params.vel_innov_gate, 1.0f);
+		gate_size[2] = _vvelInnovGate;
 	}
 
 	if (_fuse_pos) {
@@ -147,12 +147,12 @@ void Ekf::fuseVelPosHeight()
 		} else if (_control_status.flags.ev_hgt) {
 			fuse_map[5] = true;
 			// calculate the innovation assuming the external vision observation is in local NED frame
-			innovation[5] = _state.pos(2) - _ev_sample_delayed.posNED(2);
+			innovation[5] = _state.pos(2) - _ev_sample_delayed.pos(2);
 			// observation variance - defined externally
 			R[5] = fmaxf(_ev_sample_delayed.hgtErr, 0.01f);
 			R[5] = R[5] * R[5];
 			// innovation gate size
-			gate_size[5] = fmaxf(_params.ev_innov_gate, 1.0f);
+			gate_size[5] = fmaxf(_params.ev_pos_innov_gate, 1.0f);
 		}
 
 		// update innovation class variable for logging purposes
@@ -168,6 +168,8 @@ void Ekf::fuseVelPosHeight()
 			// Compute the ratio of innovation to gate size
 			_vel_pos_test_ratio[obs_index] = sq(innovation[obs_index]) / (sq(gate_size[obs_index]) *
 							 _vel_pos_innov_var[obs_index]);
+		}else{
+			_vel_pos_test_ratio[obs_index] = 0;
 		}
 	}
 

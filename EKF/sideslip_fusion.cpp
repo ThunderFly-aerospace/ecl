@@ -73,8 +73,7 @@ void Ekf::fuseSideslip()
 	rel_wind(1) = ve - vwe;
 	rel_wind(2) = vd;
 
-	Dcmf earth_to_body(_state.quat_nominal);
-	earth_to_body = earth_to_body.transpose(); //Why transpose?
+	Dcmf earth_to_body = quat_to_invrotmat(_state.quat_nominal);
 
 	// rotate into body axes
 	rel_wind = earth_to_body * rel_wind;
@@ -133,12 +132,12 @@ void Ekf::fuseSideslip()
 			if (update_wind_only) {
 				resetWindStates();
 				resetWindCovariance();
-				ECL_ERR("EKF synthetic sideslip fusion badly conditioned - wind covariance reset");
+				ECL_ERR_TIMESTAMPED("EKF synthetic sideslip fusion badly conditioned - wind covariance reset");
 
 			} else {
 				initialiseCovariance();
 				_state.wind_vel.setZero();
-				ECL_ERR("EKF synthetic sideslip fusion badly conditioned - full covariance reset");
+				ECL_ERR_TIMESTAMPED("EKF synthetic sideslip fusion badly conditioned - full covariance reset");
 			}
 
 			return;
