@@ -46,6 +46,7 @@ add_library(ecl_EKF
 	terrain_estimator.cpp
 	vel_pos_fusion.cpp
 	gps_yaw_fusion.cpp
+	range_finder_checks.cpp
 )
 
 add_dependencies(ecl_EKF prebuild_targets)
@@ -54,6 +55,8 @@ target_include_directories(ecl_EKF PUBLIC ${ECL_SOURCE_DIR})
 target_link_libraries(ecl_EKF PRIVATE ecl_geo ecl_geo_lookup mathlib)
 
 set_target_properties(ecl_EKF PROPERTIES PUBLIC_HEADER "ekf.h")
+
+target_compile_options(ecl_EKF PRIVATE -fno-associative-math)
 
 if(EKF_PYTHON_TESTS)
 	add_subdirectory(swig)

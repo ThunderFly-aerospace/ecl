@@ -73,16 +73,20 @@ void Ekf::fuseMag()
 	SH_MAG[8] = 2.0f*magE*q3;
 
 	// rotate magnetometer earth field state into body frame
-	Dcmf R_to_body(_state.quat_nominal);
-	R_to_body = R_to_body.transpose();
+	Dcmf R_to_body = quat_to_invrotmat(_state.quat_nominal);
 
 	Vector3f mag_I_rot = R_to_body * _state.mag_I;
 
 	// compute magnetometer innovations
 	_mag_innov[0] = (mag_I_rot(0) + _state.mag_B(0)) - _mag_sample_delayed.mag(0);
 	_mag_innov[1] = (mag_I_rot(1) + _state.mag_B(1)) - _mag_sample_delayed.mag(1);
-	_mag_innov[2] = (mag_I_rot(2) + _state.mag_B(2)) - _mag_sample_delayed.mag(2);
 
+	// do not use the synthesized measurement for the magnetomter Z component for 3D fusion
+	if (_control_status.flags.synthetic_mag_z) {
+		_mag_innov[2] = 0.0f;
+	} else {
+		_mag_innov[2] = (mag_I_rot(2) + _state.mag_B(2)) - _mag_sample_delayed.mag(2);
+	}
 	// Observation jacobian and Kalman gain vectors
 	float H_MAG[24];
 	float Kfusion[24];
@@ -101,7 +105,7 @@ void Ekf::fuseMag()
 
 		// we need to re-initialise covariances and abort this fusion step
 		resetMagCovariance();
-		ECL_ERR("EKF magX fusion numerical error - covariance reset");
+		ECL_ERR_TIMESTAMPED("EKF magX fusion numerical error - covariance reset");
 		return;
 
 	}
@@ -120,7 +124,7 @@ void Ekf::fuseMag()
 
 		// we need to re-initialise covariances and abort this fusion step
 		resetMagCovariance();
-		ECL_ERR("EKF magY fusion numerical error - covariance reset");
+		ECL_ERR_TIMESTAMPED("EKF magY fusion numerical error - covariance reset");
 		return;
 
 	}
@@ -139,7 +143,7 @@ void Ekf::fuseMag()
 
 		// we need to re-initialise covariances and abort this fusion step
 		resetMagCovariance();
-		ECL_ERR("EKF magZ fusion numerical error - covariance reset");
+		ECL_ERR_TIMESTAMPED("EKF magZ fusion numerical error - covariance reset");
 		return;
 
 	}
@@ -284,6 +288,12 @@ void Ekf::fuseMag()
 			Kfusion[21] = SK_MY[0]*(P[21][20] + P[21][0]*SH_MAG[2] + P[21][1]*SH_MAG[1] + P[21][2]*SH_MAG[0] - P[21][3]*SK_MY[2] - P[21][17]*SK_MY[1] - P[21][16]*SK_MY[3] + P[21][18]*SK_MY[4]);
 
 		} else if (index == 2) {
+
+			// we do not fuse synthesized magnetomter measurements when doing 3D fusion
+			if (_control_status.flags.synthetic_mag_z) {
+				continue;
+			}
+
 			// calculate Z axis observation jacobians
 			memset(H_MAG, 0, sizeof(H_MAG));
 			H_MAG[0] = SH_MAG[1];
@@ -500,9 +510,15 @@ void Ekf::fuseHeading()
 			float Tbn_0_0 = sq(_ev_sample_delayed.quat(0))+sq(_ev_sample_delayed.quat(1))-sq(_ev_sample_delayed.quat(2))-sq(_ev_sample_delayed.quat(3));
 			measured_hdg = atan2f(Tbn_1_0,Tbn_0_0);
 
+		} else if (_mag_use_inhibit) {
+			// Special case where we either use the current or last known stationary value
+			// so set to current value as a safe default
+			measured_hdg = predicted_hdg;
+
 		} else {
-			// there is no yaw observation
+			// Should not be doing yaw fusion
 			return;
+
 		}
 
 	} else {
@@ -593,8 +609,13 @@ void Ekf::fuseHeading()
 			float Tbn_1_1 = sq(_ev_sample_delayed.quat(0))-sq(_ev_sample_delayed.quat(1))+sq(_ev_sample_delayed.quat(2))-sq(_ev_sample_delayed.quat(3));
 			measured_hdg = atan2f(Tbn_0_1_neg,Tbn_1_1);
 
+		} else if (_mag_use_inhibit) {
+			// Special case where we either use the current or last known stationary value
+			// so set to current value as a safe default
+			measured_hdg = predicted_hdg;
+
 		} else {
-			// there is no yaw observation
+			// Should not be doing yaw fusion
 			return;
 
 		}
@@ -610,8 +631,8 @@ void Ekf::fuseHeading()
 		R_YAW = sq(fmaxf(_ev_sample_delayed.angErr, 1.0e-2f));
 
 	} else {
-		// there is no yaw observation
-		return;
+		// default value
+		R_YAW = 0.01f;
 	}
 
 	// wrap the heading to the interval between +-pi
@@ -626,22 +647,20 @@ void Ekf::fuseHeading()
 			// Vehicle is not at rest so fuse a zero innovation and record the
 			// predicted heading to use as an observation when movement ceases.
 			_heading_innov = 0.0f;
-			_vehicle_at_rest_prev = false;
+			_last_static_yaw = predicted_hdg;
+
 		} else {
 			// Vehicle is at rest so use the last moving prediction as an observation
 			// to prevent the heading from drifting and to enable yaw gyro bias learning
 			// before takeoff.
-			if (!_vehicle_at_rest_prev || !_mag_use_inhibit_prev) {
-				_last_static_yaw = predicted_hdg;
-				_vehicle_at_rest_prev = true;
-			}
 			_heading_innov = predicted_hdg - _last_static_yaw;
-			R_YAW = 0.01f;
 			innov_gate = 5.0f;
+
 		}
 	} else {
 		_heading_innov = predicted_hdg - measured_hdg;
 		_last_static_yaw = predicted_hdg;
+
 	}
 	_mag_use_inhibit_prev = _mag_use_inhibit;
 
@@ -677,7 +696,7 @@ void Ekf::fuseHeading()
 
 		// we reinitialise the covariance matrix and abort this fusion step
 		initialiseCovariance();
-		ECL_ERR("EKF mag yaw fusion numerical error - covariance reset");
+		ECL_ERR_TIMESTAMPED("EKF mag yaw fusion numerical error - covariance reset");
 		return;
 	}
 
@@ -982,4 +1001,16 @@ void Ekf::limitDeclination()
 		_state.mag_I(0) = h_field * cosf(decl_min);
 		_state.mag_I(1) = h_field * sinf(decl_min);
 	}
+}
+
+float Ekf::calculate_synthetic_mag_z_measurement(Vector3f mag_meas, Vector3f mag_earth_predicted)
+{
+	// theoretical magnitude of the magnetometer Z component value given X and Y sensor measurement and our knowledge
+	// of the earth magnetic field vector at the current location
+	float mag_z_abs = sqrtf(math::max(sq(mag_earth_predicted.length()) - sq(mag_meas(0)) - sq(mag_meas(1)), 0.0f));
+
+	// calculate sign of synthetic magnetomter Z component based on the sign of the predicted magnetomer Z component
+	float mag_z_body_pred = _R_to_earth(0,2) * mag_earth_predicted(0) + _R_to_earth(1,2) * mag_earth_predicted(1) + _R_to_earth(2,2) * mag_earth_predicted(2);
+
+	return mag_z_body_pred < 0 ? -mag_z_abs : mag_z_abs;
 }

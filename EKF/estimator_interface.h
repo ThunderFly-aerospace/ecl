@@ -122,11 +122,12 @@ public:
 	// gets the innovation of the drag specific force measurement
 	virtual void get_drag_innov(float drag_innov[2]) = 0;
 
-	// gets the innovation variance of the HAGL measurement
-	virtual void get_hagl_innov_var(float *flow_innov_var) = 0;
-
-	// gets the innovation of the HAGL measurement
-	virtual void get_hagl_innov(float *flow_innov_var) = 0;
+	virtual void getHaglInnovVar(float *hagl_innov_var) = 0;
+	virtual void getHaglInnov(float *hagl_innov) = 0;
+	//[[deprecated("Replaced by getHaglInnovVar")]]
+	void get_hagl_innov_var(float *hagl_innov_var) { getHaglInnovVar(hagl_innov_var); }
+	//[[deprecated("Replaced by getHaglInnov")]]
+	void get_hagl_innov(float *hagl_innov) { getHaglInnov(hagl_innov); }
 
 	// return an array containing the output predictor angular, velocity and position tracking
 	// error magnitudes (rad), (m/s), (m)
@@ -191,7 +192,7 @@ public:
 	void setAirspeedData(uint64_t time_usec, float true_airspeed, float eas2tas);
 
 	// set range data
-	void setRangeData(uint64_t time_usec, float data);
+	void setRangeData(uint64_t time_usec, float data, int8_t quality);
 
 	// set optical flow data
 	// if optical flow sensor gyro delta angles are not available, set gyroXYZ vector fields to NaN and the EKF will use its internal delta angle data instead
@@ -268,26 +269,22 @@ public:
 	// return true if the EKF is dead reckoning the position using inertial data only
 	bool inertial_dead_reckoning() {return _is_dead_reckoning;}
 
-	// return true if the terrain estimate is valid
-	virtual bool get_terrain_valid() = 0;
+	virtual bool isTerrainEstimateValid() = 0;
+	//[[deprecated("Replaced by isTerrainEstimateValid")]]
+	bool get_terrain_valid() { return isTerrainEstimateValid(); }
 
 	// get the estimated terrain vertical position relative to the NED origin
-	virtual void get_terrain_vert_pos(float *ret) = 0;
+	virtual void getTerrainVertPos(float *ret) = 0;
+	//[[deprecated("Replaced by getTerrainVertPos")]]
+	void get_terrain_vert_pos(float *ret) { getTerrainVertPos(ret); }
 
 	// return true if the local position estimate is valid
 	bool local_position_is_valid();
 
-	void copy_quaternion(float *quat)
-	{
-		for (unsigned i = 0; i < 4; i++) {
-			quat[i] = _output_new.quat_nominal(i);
-		}
-	}
-
 	const matrix::Quatf &get_quaternion() const { return _output_new.quat_nominal; }
 
 	// return the quaternion defining the rotation from the EKF to the External Vision reference frame
-	virtual void get_ekf2ev_quaternion(float *quat) = 0;
+	virtual void get_ev2ekf_quaternion(float *quat) = 0;
 
 	// get the velocity of the body frame origin in local NED earth frame
 	void get_velocity(float *vel)
@@ -492,7 +489,7 @@ protected:
 	innovation_fault_status_u _innov_check_fail_status{};
 
 	bool _is_dead_reckoning{false};		// true if we are no longer fusing measurements that constrain horizontal velocity drift
-	bool _deadreckon_time_exceeded{false};	// true if the horizontal nav solution has been deadreckoning for too long and is invalid
+	bool _deadreckon_time_exceeded{true};	// true if the horizontal nav solution has been deadreckoning for too long and is invalid
 	bool _is_wind_dead_reckoning{false};	// true if we are navigationg reliant on wind relative measurements
 
 	// IMU vibration and movement monitoring

@@ -57,6 +57,7 @@ ECL_Controller::ECL_Controller() :
 	_k_p(0.0f),
 	_k_i(0.0f),
 	_k_ff(0.0f),
+    _k_scaling_multiplicator(1.0f),
 	_integrator_max(0.0f),
 	_max_rate(0.0f),
 	_last_output(0.0f),
@@ -92,6 +93,11 @@ void ECL_Controller::set_k_i(float k_i)
 void ECL_Controller::set_k_ff(float k_ff)
 {
 	_k_ff = k_ff;
+}
+
+void ECL_Controller::set_scaling(float k_scaling_multiplicator)
+{
+    _k_scaling_multiplicator = k_scaling_multiplicator;
 }
 
 void ECL_Controller::set_integrator_max(float max)
@@ -142,4 +148,18 @@ float ECL_Controller::constrain_airspeed(float airspeed, float minspeed, float m
 	}
 
 	return airspeed_result;
+}
+
+
+float ECL_Controller::scaling_multiplicator(float scaling, float scaling_multiplicator)
+{
+    float scaling_value = scaling;
+
+    if (scaling_multiplicator > 0) {
+        scaling_value = scaling_multiplicator * scaling;
+    } else {
+        scaling_value = 1;
+    }
+
+    return scaling_value;
 }

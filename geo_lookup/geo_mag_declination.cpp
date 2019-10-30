@@ -46,6 +46,7 @@
 
 #include <mathlib/mathlib.h>
 
+#include <math.h>
 #include <stdint.h>
 
 using math::constrain;
@@ -139,8 +140,8 @@ get_table_data(float lat, float lon, const int8_t table[13][37])
 	}
 
 	/* round down to nearest sampling resolution */
-	float min_lat = int(lat / SAMPLING_RES) * SAMPLING_RES;
-	float min_lon = int(lon / SAMPLING_RES) * SAMPLING_RES;
+	float min_lat = floorf(lat / SAMPLING_RES) * SAMPLING_RES;
+	float min_lon = floorf(lon / SAMPLING_RES) * SAMPLING_RES;
 
 	/* find index of nearest low sampling point */
 	unsigned min_lat_index = get_lookup_table_index(&min_lat, SAMPLING_MIN_LAT, SAMPLING_MAX_LAT);

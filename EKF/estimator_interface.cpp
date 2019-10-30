@@ -104,7 +104,7 @@ void EstimatorInterface::setIMUData(const imuSample &imu_sample)
 				_drag_buffer_fail = !_drag_buffer.allocate(_obs_buffer_length);
 
 				if (_drag_buffer_fail) {
-					ECL_ERR("EKF drag buffer allocation failed");
+					ECL_ERR_TIMESTAMPED("EKF drag buffer allocation failed");
 					return;
 				}
 			}
@@ -170,7 +170,7 @@ void EstimatorInterface::setMagData(uint64_t time_usec, float (&data)[3])
 		_mag_buffer_fail = !_mag_buffer.allocate(_obs_buffer_length);
 
 		if (_mag_buffer_fail) {
-			ECL_ERR("EKF mag buffer allocation failed");
+			ECL_ERR_TIMESTAMPED("EKF mag buffer allocation failed");
 			return;
 		}
 	}
@@ -202,7 +202,7 @@ void EstimatorInterface::setGpsData(uint64_t time_usec, const gps_message &gps)
 		_gps_buffer_fail = !_gps_buffer.allocate(_obs_buffer_length);
 
 		if (_gps_buffer_fail) {
-			ECL_ERR("EKF GPS buffer allocation failed");
+			ECL_ERR_TIMESTAMPED("EKF GPS buffer allocation failed");
 			return;
 		}
 	}
@@ -263,7 +263,7 @@ void EstimatorInterface::setBaroData(uint64_t time_usec, float data)
 		_baro_buffer_fail = !_baro_buffer.allocate(_obs_buffer_length);
 
 		if (_baro_buffer_fail) {
-			ECL_ERR("EKF baro buffer allocation failed");
+			ECL_ERR_TIMESTAMPED("EKF baro buffer allocation failed");
 			return;
 		}
 	}
@@ -296,7 +296,7 @@ void EstimatorInterface::setAirspeedData(uint64_t time_usec, float true_airspeed
 		_airspeed_buffer_fail = !_airspeed_buffer.allocate(_obs_buffer_length);
 
 		if (_airspeed_buffer_fail) {
-			ECL_ERR("EKF airspeed buffer allocation failed");
+			ECL_ERR_TIMESTAMPED("EKF airspeed buffer allocation failed");
 			return;
 		}
 	}
@@ -314,7 +314,7 @@ void EstimatorInterface::setAirspeedData(uint64_t time_usec, float true_airspeed
 	}
 }
 
-void EstimatorInterface::setRangeData(uint64_t time_usec, float data)
+void EstimatorInterface::setRangeData(uint64_t time_usec, float data, int8_t quality)
 {
 	if (!_initialised || _range_buffer_fail) {
 		return;
@@ -326,7 +326,7 @@ void EstimatorInterface::setRangeData(uint64_t time_usec, float data)
 		_range_buffer_fail = !_range_buffer.allocate(_obs_buffer_length);
 
 		if (_range_buffer_fail) {
-			ECL_ERR("EKF range finder buffer allocation failed");
+			ECL_ERR_TIMESTAMPED("EKF range finder buffer allocation failed");
 			return;
 		}
 	}
@@ -336,6 +336,7 @@ void EstimatorInterface::setRangeData(uint64_t time_usec, float data)
 		rangeSample range_sample_new;
 		range_sample_new.rng = data;
 		range_sample_new.time_us = time_usec - _params.range_delay_ms * 1000;
+		range_sample_new.quality = quality;
 		_time_last_range = time_usec;
 
 		_range_buffer.push(range_sample_new);
@@ -355,7 +356,7 @@ void EstimatorInterface::setOpticalFlowData(uint64_t time_usec, flow_message *fl
 		_flow_buffer_fail = !_flow_buffer.allocate(_imu_buffer_length);
 
 		if (_flow_buffer_fail) {
-			ECL_ERR("EKF optical flow buffer allocation failed");
+			ECL_ERR_TIMESTAMPED("EKF optical flow buffer allocation failed");
 			return;
 		}
 	}
@@ -383,7 +384,7 @@ void EstimatorInterface::setOpticalFlowData(uint64_t time_usec, flow_message *fl
 			flow_magnitude_good = (flow_rate_magnitude <= _flow_max_rate);
 		}
 
-		bool relying_on_flow = !_control_status.flags.gps && !_control_status.flags.ev_pos;
+		bool relying_on_flow = !_control_status.flags.gps && !_control_status.flags.ev_pos && !_control_status.flags.ev_vel;
 
 		// check quality metric
 		bool flow_quality_good = (flow->quality >= _params.flow_qual_min);
@@ -427,7 +428,7 @@ void EstimatorInterface::setExtVisionData(uint64_t time_usec, ext_vision_message
 		_ev_buffer_fail = !_ext_vision_buffer.allocate(_obs_buffer_length);
 
 		if (_ev_buffer_fail) {
-			ECL_ERR("EKF external vision buffer allocation failed");
+			ECL_ERR_TIMESTAMPED("EKF external vision buffer allocation failed");
 			return;
 		}
 	}
@@ -441,9 +442,11 @@ void EstimatorInterface::setExtVisionData(uint64_t time_usec, ext_vision_message
 		// copy required data
 		ev_sample_new.angErr = evdata->angErr;
 		ev_sample_new.posErr = evdata->posErr;
+		ev_sample_new.velErr = evdata->velErr;
 		ev_sample_new.hgtErr = evdata->hgtErr;
 		ev_sample_new.quat = evdata->quat;
-		ev_sample_new.posNED = evdata->posNED;
+		ev_sample_new.pos = evdata->pos;
+		ev_sample_new.vel = evdata->vel;
 
 		// record time for comparison next measurement
 		_time_last_ext_vision = time_usec;
@@ -465,7 +468,7 @@ void EstimatorInterface::setAuxVelData(uint64_t time_usec, float (&data)[2], flo
 		_auxvel_buffer_fail = !_auxvel_buffer.allocate(_obs_buffer_length);
 
 		if (_auxvel_buffer_fail) {
-			ECL_ERR("EKF aux vel buffer allocation failed");
+			ECL_ERR_TIMESTAMPED("EKF aux vel buffer allocation failed");
 			return;
 		}
 	}
@@ -514,7 +517,7 @@ bool EstimatorInterface::initialise_interface(uint64_t timestamp)
 	      _output_buffer.allocate(_imu_buffer_length) &&
 	      _output_vert_buffer.allocate(_imu_buffer_length))) {
 
-		ECL_ERR("EKF buffer allocation failed!");
+		ECL_ERR_TIMESTAMPED("EKF buffer allocation failed!");
 		unallocate_buffers();
 		return false;
 	}
