@@ -83,6 +83,7 @@ float ECL_PitchController::control_bodyrate(const struct ECL_ControlData &ctl_da
 	uint64_t dt_micros = ecl_elapsed_time(&_last_run);
 	_last_run = ecl_absolute_time();
 	float dt = (float)dt_micros * 1e-6f;
+    float scaling_value = scaling_multiplicator(ctl_data.scaler, _k_scaling_multiplicator);
 
 	/* lock integral for long intervals */
 	bool lock_integrator = ctl_data.lock_integrator;
@@ -95,7 +96,7 @@ float ECL_PitchController::control_bodyrate(const struct ECL_ControlData &ctl_da
 
 	if (!lock_integrator && _k_i > 0.0f) {
 
-		float id = _rate_error * dt * ctl_data.scaler;
+		float id = _rate_error * dt * scaling_value;
 
 		/*
 		 * anti-windup: do not allow integrator to increase if actuator is at limit
@@ -114,8 +115,8 @@ float ECL_PitchController::control_bodyrate(const struct ECL_ControlData &ctl_da
 	}
 
 	/* Apply PI rate controller and store non-limited output */
-	_last_output = _bodyrate_setpoint * _k_ff * ctl_data.scaler +
-		       _rate_error * _k_p * ctl_data.scaler * ctl_data.scaler
+	_last_output = _bodyrate_setpoint * _k_ff * scaling_value +
+		       _rate_error * _k_p * scaling_value * scaling_value
 		       + _integrator;  //scaler is proportional to 1/airspeed
 
 	return math::constrain(_last_output, -1.0f, 1.0f);

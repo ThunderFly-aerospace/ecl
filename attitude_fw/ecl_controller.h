@@ -87,6 +87,7 @@ public:
 	void set_k_p(float k_p);
 	void set_k_i(float k_i);
 	void set_k_ff(float k_ff);
+	void set_scaling(float k_scaling_multiplicator);
 	void set_integrator_max(float max);
 	void set_max_rate(float max_rate);
 	void set_bodyrate_setpoint(float rate);
@@ -105,6 +106,7 @@ protected:
 	float _k_p;
 	float _k_i;
 	float _k_ff;
+	float _k_scaling_multiplicator;
 	float _integrator_max;
 	float _max_rate;
 	float _last_output;
@@ -113,4 +115,5 @@ protected:
 	float _rate_setpoint;
 	float _bodyrate_setpoint;
 	float constrain_airspeed(float airspeed, float minspeed, float maxspeed);
+    float scaling_multiplicator(float scaling, float scaling_multiplicator);
 };

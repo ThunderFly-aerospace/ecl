@@ -128,6 +128,7 @@ float ECL_YawController::control_bodyrate(const struct ECL_ControlData &ctl_data
 	uint64_t dt_micros = ecl_elapsed_time(&_last_run);
 	_last_run = ecl_absolute_time();
 	float dt = (float)dt_micros * 1e-6f;
+    float scaling_value = scaling_multiplicator(ctl_data.scaler, _k_scaling_multiplicator);
 
 	/* lock integral for long intervals */
 	bool lock_integrator = ctl_data.lock_integrator;
@@ -177,8 +178,8 @@ float ECL_YawController::control_bodyrate(const struct ECL_ControlData &ctl_data
 	}
 
 	/* Apply PI rate controller and store non-limited output */
-	_last_output = (_bodyrate_setpoint * _k_ff + _rate_error * _k_p + _integrator) * ctl_data.scaler *
-		       ctl_data.scaler;  //scaler is proportional to 1/airspeed
+	_last_output = (_bodyrate_setpoint * _k_ff + _rate_error * _k_p + _integrator) * scaling_value *
+		       scaling_value;  //scaler is proportional to 1/airspeed
 
 
 	return math::constrain(_last_output, -1.0f, 1.0f);
