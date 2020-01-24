@@ -47,7 +47,7 @@
 
 // GPS pre-flight check bit locations
 #define MASK_GPS_NSATS  (1<<0)
-#define MASK_GPS_GDOP   (1<<1)
+#define MASK_GPS_PDOP   (1<<1)
 #define MASK_GPS_HACC   (1<<2)
 #define MASK_GPS_VACC   (1<<3)
 #define MASK_GPS_SACC   (1<<4)
@@ -62,12 +62,12 @@ bool Ekf::collect_gps(const gps_message &gps)
 	_gps_checks_passed = gps_is_good(gps);
 	if (!_NED_origin_initialised && _gps_checks_passed) {
 		// If we have good GPS data set the origin's WGS-84 position to the last gps fix
-		double lat = gps.lat / 1.0e7;
-		double lon = gps.lon / 1.0e7;
+		const double lat = gps.lat / 1.0e7;
+		const double lon = gps.lon / 1.0e7;
 		map_projection_init_timestamped(&_pos_ref, lat, lon, _time_last_imu);
 
 		// if we are already doing aiding, correct for the change in position since the EKF started navigationg
-		if (_control_status.flags.opt_flow || _control_status.flags.gps || _control_status.flags.ev_pos) {
+		if (_control_status.flags.opt_flow || _control_status.flags.gps || _control_status.flags.ev_pos || _control_status.flags.ev_vel) {
 			double est_lat, est_lon;
 			map_projection_reproject(&_pos_ref, -_state.pos(0), -_state.pos(1), &est_lat, &est_lon);
 			map_projection_init_timestamped(&_pos_ref, est_lat, est_lon, _time_last_imu);
@@ -76,6 +76,7 @@ bool Ekf::collect_gps(const gps_message &gps)
 		// Take the current GPS height and subtract the filter height above origin to estimate the GPS height of the origin
 		_gps_alt_ref = 1e-3f * (float)gps.alt + _state.pos(2);
 		_NED_origin_initialised = true;
+		_earth_rate_NED = calcEarthRateNED((float)_pos_ref.lat_rad);
 		_last_gps_origin_time_us = _time_last_imu;
 
 		// set the magnetic field data returned by the geo library using the current GPS position
@@ -90,15 +91,14 @@ bool Ekf::collect_gps(const gps_message &gps)
 		_gps_origin_epv = gps.epv;
 
 		// if the user has selected GPS as the primary height source, switch across to using it
-		if (_primary_hgt_source == VDIST_SENSOR_GPS) {
-			ECL_INFO("EKF GPS checks passed (WGS-84 origin set, using GPS height)");
-			_control_status.flags.baro_hgt = false;
-			_control_status.flags.gps_hgt = true;
-			_control_status.flags.rng_hgt = false;
+
+		if (_params.vdist_sensor_type == VDIST_SENSOR_GPS) {
+			ECL_INFO_TIMESTAMPED("GPS checks passed (WGS-84 origin set, using GPS height)");
+			setControlGPSHeight();
 			// zero the sensor offset
 			_hgt_sensor_offset = 0.0f;
 		} else {
-			ECL_INFO("EKF GPS checks passed (WGS-84 origin set)");
+			ECL_INFO_TIMESTAMPED("GPS checks passed (WGS-84 origin set)");
 		}
 	}
 
@@ -121,8 +121,8 @@ bool Ekf::gps_is_good(const gps_message &gps)
 	// Check the number of satellites
 	_gps_check_fail_status.flags.nsats = (gps.nsats < _params.req_nsats);
 
-	// Check the geometric dilution of precision
-	_gps_check_fail_status.flags.gdop = (gps.gdop > _params.req_gdop);
+	// Check the position dilution of precision
+	_gps_check_fail_status.flags.pdop = (gps.pdop > _params.req_pdop);
 
 	// Check the reported horizontal and vertical position accuracy
 	_gps_check_fail_status.flags.hacc = (gps.eph > _params.req_hacc);
@@ -137,60 +137,49 @@ bool Ekf::gps_is_good(const gps_message &gps)
 
 	// Calculate time lapsed since last update, limit to prevent numerical errors and calculate a lowpass filter coefficient
 	const float filt_time_const = 10.0f;
-	float dt = fminf(fmaxf(float(_time_last_imu - _gps_pos_prev.timestamp) * 1e-6f, 0.001f), filt_time_const);
-	float filter_coef = dt / filt_time_const;
+	const float dt = fminf(fmaxf(float(_time_last_imu - _gps_pos_prev.timestamp) * 1e-6f, 0.001f), filt_time_const);
+	const float filter_coef = dt / filt_time_const;
 
 	// The following checks are only valid when the vehicle is at rest
-	double lat = gps.lat * 1.0e-7;
-	double lon = gps.lon * 1.0e-7;
+	const double lat = gps.lat * 1.0e-7;
+	const double lon = gps.lon * 1.0e-7;
 	if (!_control_status.flags.in_air && _vehicle_at_rest) {
 		// Calculate position movement since last measurement
-		float delta_posN = 0.0f;
-		float delta_PosE = 0.0f;
+		float delta_pos_n = 0.0f;
+		float delta_pos_e = 0.0f;
 
 		// calculate position movement since last GPS fix
 		if (_gps_pos_prev.timestamp > 0) {
-			map_projection_project(&_gps_pos_prev, lat, lon, &delta_posN, &delta_PosE);
+			map_projection_project(&_gps_pos_prev, lat, lon, &delta_pos_n, &delta_pos_e);
 
 		} else {
 			// no previous position has been set
 			map_projection_init_timestamped(&_gps_pos_prev, lat, lon, _time_last_imu);
 			_gps_alt_prev = 1e-3f * (float)gps.alt;
-
 		}
 
-		// Calculate the horizontal drift velocity components and limit to 10x the threshold
-		float vel_limit = 10.0f * _params.req_hdrift;
-		float velN = fminf(fmaxf(delta_posN / dt, -vel_limit), vel_limit);
-		float velE = fminf(fmaxf(delta_PosE / dt, -vel_limit), vel_limit);
+		// Calculate the horizontal and vertical drift velocity components and limit to 10x the threshold
+		const Vector3f vel_limit(_params.req_hdrift, _params.req_hdrift, _params.req_vdrift);
+		Vector3f pos_derived(delta_pos_n, delta_pos_e, (_gps_alt_prev - 1e-3f * (float)gps.alt));
+		pos_derived = matrix::constrain(pos_derived / dt, -10.0f * vel_limit, 10.0f * vel_limit);
 
 		// Apply a low pass filter
-		_gpsDriftVelN = velN * filter_coef + _gpsDriftVelN * (1.0f - filter_coef);
-		_gpsDriftVelE = velE * filter_coef + _gpsDriftVelE * (1.0f - filter_coef);
+		_gps_pos_deriv_filt = pos_derived * filter_coef + _gps_pos_deriv_filt * (1.0f - filter_coef);
 
 		// Calculate the horizontal drift speed and fail if too high
-		_gps_drift_metrics[0] = sqrtf(_gpsDriftVelN * _gpsDriftVelN + _gpsDriftVelE * _gpsDriftVelE);
+		_gps_drift_metrics[0] = Vector2f(_gps_pos_deriv_filt.xy()).norm();
 		_gps_check_fail_status.flags.hdrift = (_gps_drift_metrics[0] > _params.req_hdrift);
 
-		// Calculate the vertical drift velocity and limit to 10x the threshold
-		float vz_drift_limit = 10.0f * _params.req_vdrift;
-		float gps_alt_m = 1e-3f * (float)gps.alt;
-		float velD = math::constrain(((_gps_alt_prev - gps_alt_m) / dt), -vz_drift_limit, vz_drift_limit);
-
-		// Apply a low pass filter to the vertical velocity
-		_gps_drift_velD = velD * filter_coef + _gps_drift_velD * (1.0f - filter_coef);
-
 		// Fail if the vertical drift speed is too high
-		_gps_drift_metrics[1] = fabsf(_gps_drift_velD);
+		_gps_drift_metrics[1] = fabsf(_gps_pos_deriv_filt(2));
 		_gps_check_fail_status.flags.vdrift = (_gps_drift_metrics[1] > _params.req_vdrift);
 
 		// Check the magnitude of the filtered horizontal GPS velocity
-		float vxy_drift_limit = 10.0f * _params.req_hdrift;
-		float gps_velN = fminf(fmaxf(gps.vel_ned[0], -vxy_drift_limit), vxy_drift_limit);
-		float gps_velE = fminf(fmaxf(gps.vel_ned[1], -vxy_drift_limit), vxy_drift_limit);
-		_gps_velN_filt = gps_velN * filter_coef + _gps_velN_filt * (1.0f - filter_coef);
-		_gps_velE_filt  = gps_velE * filter_coef + _gps_velE_filt  * (1.0f - filter_coef);
-		_gps_drift_metrics[2] = sqrtf(_gps_velN_filt * _gps_velN_filt + _gps_velE_filt * _gps_velE_filt);
+		Vector2f gps_velNE = matrix::constrain(Vector2f(gps.vel_ned.xy()),
+							-10.0f * _params.req_hdrift,
+							 10.0f * _params.req_hdrift);
+		_gps_velNE_filt = gps_velNE * filter_coef + _gps_velNE_filt * (1.0f - filter_coef);
+		_gps_drift_metrics[2] = _gps_velNE_filt.norm();
 		_gps_check_fail_status.flags.hspeed = (_gps_drift_metrics[2] > _params.req_hdrift);
 
 		_gps_drift_updated = true;
@@ -215,7 +204,7 @@ bool Ekf::gps_is_good(const gps_message &gps)
 
 	// Check  the filtered difference between GPS and EKF vertical velocity
 	float vz_diff_limit = 10.0f * _params.req_vdrift;
-	float vertVel = fminf(fmaxf((gps.vel_ned[2] - _state.vel(2)), -vz_diff_limit), vz_diff_limit);
+	float vertVel = fminf(fmaxf((gps.vel_ned(2) - _state.vel(2)), -vz_diff_limit), vz_diff_limit);
 	_gps_velD_diff_filt = vertVel * filter_coef + _gps_velD_diff_filt * (1.0f - filter_coef);
 	_gps_check_fail_status.flags.vspeed = (fabsf(_gps_velD_diff_filt) > _params.req_vdrift);
 
@@ -228,7 +217,7 @@ bool Ekf::gps_is_good(const gps_message &gps)
 	if (
 		_gps_check_fail_status.flags.fix ||
 		(_gps_check_fail_status.flags.nsats   && (_params.gps_check_mask & MASK_GPS_NSATS)) ||
-		(_gps_check_fail_status.flags.gdop    && (_params.gps_check_mask & MASK_GPS_GDOP)) ||
+		(_gps_check_fail_status.flags.pdop    && (_params.gps_check_mask & MASK_GPS_PDOP)) ||
 		(_gps_check_fail_status.flags.hacc    && (_params.gps_check_mask & MASK_GPS_HACC)) ||
 		(_gps_check_fail_status.flags.vacc    && (_params.gps_check_mask & MASK_GPS_VACC)) ||
 		(_gps_check_fail_status.flags.sacc    && (_params.gps_check_mask & MASK_GPS_SACC)) ||

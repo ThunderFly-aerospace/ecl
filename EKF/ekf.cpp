@@ -47,32 +47,29 @@
 bool Ekf::init(uint64_t timestamp)
 {
 	bool ret = initialise_interface(timestamp);
+	reset();
+
+	return ret;
+}
+
+void Ekf::reset()
+{
 	_state.vel.setZero();
 	_state.pos.setZero();
-	_state.gyro_bias.setZero();
-	_state.accel_bias.setZero();
+	_state.delta_ang_bias.setZero();
+	_state.delta_vel_bias.setZero();
 	_state.mag_I.setZero();
 	_state.mag_B.setZero();
 	_state.wind_vel.setZero();
-	_state.quat_nominal.setZero();
-	_state.quat_nominal(0) = 1.0f;
+	_state.quat_nominal.setIdentity();
 
 	_output_new.vel.setZero();
 	_output_new.pos.setZero();
-	_output_new.quat_nominal.setZero();
-	_output_new.quat_nominal(0) = 1.0f;
+	_output_new.quat_nominal.setIdentity();
+
+	initialiseCovariance();
 
 	_delta_angle_corr.setZero();
-	_imu_down_sampled.delta_ang.setZero();
-	_imu_down_sampled.delta_vel.setZero();
-	_imu_down_sampled.delta_ang_dt = 0.0f;
-	_imu_down_sampled.delta_vel_dt = 0.0f;
-	_imu_down_sampled.time_us = timestamp;
-
-	_q_down_sampled(0) = 1.0f;
-	_q_down_sampled(1) = 0.0f;
-	_q_down_sampled(2) = 0.0f;
-	_q_down_sampled(3) = 0.0f;
 
 	_imu_updated = false;
 	_NED_origin_initialised = false;
@@ -91,11 +88,9 @@ bool Ekf::init(uint64_t timestamp)
 	_fault_status.value = 0;
 	_innov_check_fail_status.value = 0;
 
-	_accel_mag_filt = 0.0f;
-	_ang_rate_mag_filt = 0.0f;
+	_accel_magnitude_filt = 0.0f;
+	_ang_rate_magnitude_filt = 0.0f;
 	_prev_dvel_bias_var.zero();
-
-	return ret;
 }
 
 bool Ekf::update()
@@ -112,6 +107,8 @@ bool Ekf::update()
 
 	// Only run the filter if IMU data in the buffer has been updated
 	if (_imu_updated) {
+		const imuSample &imu_init = _imu_buffer.get_newest();
+		_accel_lpf.update(imu_init.delta_vel);
 
 		// perform state and covariance prediction for the main filter
 		predictState();
@@ -137,150 +134,72 @@ bool Ekf::initialiseFilter()
 {
 	// Keep accumulating measurements until we have a minimum of 10 samples for the required sensors
 
-	// Sum the IMU delta angle measurements
+	// Filter accel for tilt initialization
 	const imuSample &imu_init = _imu_buffer.get_newest();
-	_delVel_sum += imu_init.delta_vel;
+
+	if(_is_first_imu_sample){
+		_accel_lpf.reset(imu_init.delta_vel);
+		_is_first_imu_sample = false;
+	}
+	else
+	{
+		_accel_lpf.update(imu_init.delta_vel);
+	}
 
 	// Sum the magnetometer measurements
 	if (_mag_buffer.pop_first_older_than(_imu_sample_delayed.time_us, &_mag_sample_delayed)) {
-		if ((_mag_counter == 0) && (_mag_sample_delayed.time_us != 0)) {
-			// initialise the counter when we start getting data from the buffer
-			_mag_counter = 1;
-
-		} else if ((_mag_counter != 0) && (_mag_sample_delayed.time_us != 0)) {
-			// increment the sample count and apply a LPF to the measurement
+		if(_mag_sample_delayed.time_us != 0)
+		{
 			_mag_counter ++;
-
-			// don't start using data until we can be certain all bad initial data has been flushed
-			if (_mag_counter == (uint8_t)(_obs_buffer_length + 1)) {
-				// initialise filter states
-				_mag_filt_state = _mag_sample_delayed.mag;
-
-			} else if (_mag_counter > (uint8_t)(_obs_buffer_length + 1)) {
-				// noise filter the data
-				_mag_filt_state = _mag_filt_state * 0.9f + _mag_sample_delayed.mag * 0.1f;
+			// wait for all bad initial data to be flushed
+			if (_mag_counter <= uint8_t(_obs_buffer_length + 1)) {
+				_mag_lpf.reset(_mag_sample_delayed.mag);
+			} else {
+				_mag_lpf.update(_mag_sample_delayed.mag);
 			}
 		}
-	}
-
-	// Count the number of external vision measurements received
-	if (_ext_vision_buffer.pop_first_older_than(_imu_sample_delayed.time_us, &_ev_sample_delayed)) {
-		if ((_ev_counter == 0) && (_ev_sample_delayed.time_us != 0)) {
-			// initialise the counter
-			_ev_counter = 1;
-
-			// set the height fusion mode to use external vision data when we start getting valid data from the buffer
-			if (_primary_hgt_source == VDIST_SENSOR_EV) {
-				_control_status.flags.baro_hgt = false;
-				_control_status.flags.gps_hgt = false;
-				_control_status.flags.rng_hgt = false;
-				_control_status.flags.ev_hgt = true;
-			}
-
-		} else if ((_ev_counter != 0) && (_ev_sample_delayed.time_us != 0)) {
-			// increment the sample count
-			_ev_counter ++;
-		}
-	}
-
-	// set the default height source from the adjustable parameter
-	if (_hgt_counter == 0) {
-		_primary_hgt_source = _params.vdist_sensor_type;
 	}
 
 	// accumulate enough height measurements to be confident in the quality of the data
-	// we use baro height initially and switch to GPS/range/EV finder later when it passes checks.
 	if (_baro_buffer.pop_first_older_than(_imu_sample_delayed.time_us, &_baro_sample_delayed)) {
-		if ((_hgt_counter == 0) && (_baro_sample_delayed.time_us != 0)) {
-			// initialise the counter and height fusion method when we start getting data from the buffer
-			setControlBaroHeight();
-			_hgt_counter = 1;
-
-		} else if ((_hgt_counter != 0) && (_baro_sample_delayed.time_us != 0)) {
-			// increment the sample count and apply a LPF to the measurement
-			_hgt_counter ++;
-
-			// don't start using data until we can be certain all bad initial data has been flushed
-			if (_hgt_counter == (uint8_t)(_obs_buffer_length + 1)) {
-				// initialise filter states
+		if (_baro_sample_delayed.time_us != 0)
+		{
+			_baro_counter ++;
+			// wait for all bad initial data to be flushed
+			if (_baro_counter <= uint8_t(_obs_buffer_length + 1)) {
 				_baro_hgt_offset = _baro_sample_delayed.hgt;
-
-			} else if (_hgt_counter > (uint8_t)(_obs_buffer_length + 1)) {
-				// noise filter the data
+			} else if (_baro_counter > (uint8_t)(_obs_buffer_length + 1)) {
 				_baro_hgt_offset = 0.9f * _baro_hgt_offset + 0.1f * _baro_sample_delayed.hgt;
 			}
 		}
 	}
 
-	// check to see if we have enough measurements and return false if not
-	bool hgt_count_fail = _hgt_counter <= 2u * _obs_buffer_length;
-	bool mag_count_fail = _mag_counter <= 2u * _obs_buffer_length;
+	const bool not_enough_baro_samples_accumulated = _baro_counter <= 2u * _obs_buffer_length;
+	const bool not_enough_mag_samples_accumulated = _mag_counter <= 2u * _obs_buffer_length;
 
-	if (hgt_count_fail || mag_count_fail) {
+	if (not_enough_baro_samples_accumulated || not_enough_mag_samples_accumulated) {
 		return false;
 
 	} else {
+		// we use baro height initially and switch to GPS/range/EV finder later when it passes checks.
+		setControlBaroHeight();
+
 		// reset variables that are shared with post alignment GPS checks
-		_gps_drift_velD = 0.0f;
+		_gps_pos_deriv_filt(2) = 0.0f;
 		_gps_alt_ref = 0.0f;
 
-		// Zero all of the states
-		_state.vel.setZero();
-		_state.pos.setZero();
-		_state.gyro_bias.setZero();
-		_state.accel_bias.setZero();
-		_state.mag_I.setZero();
-		_state.mag_B.setZero();
-		_state.wind_vel.setZero();
-
-		// get initial roll and pitch estimate from delta velocity vector, assuming vehicle is static
-		float pitch = 0.0f;
-		float roll = 0.0f;
-
-		if (_delVel_sum.norm() > 0.001f) {
-			_delVel_sum.normalize();
-			pitch = asinf(_delVel_sum(0));
-			roll = atan2f(-_delVel_sum(1), -_delVel_sum(2));
-
-		} else {
+		if(!initialiseTilt()){
 			return false;
 		}
 
-		// calculate initial tilt alignment
-		Eulerf euler_init(roll, pitch, 0.0f);
-		_state.quat_nominal = Quatf(euler_init);
-
-		// update transformation matrix from body to world frame
-		_R_to_earth = quat_to_invrotmat(_state.quat_nominal);
-
 		// calculate the initial magnetic field and yaw alignment
-		_control_status.flags.yaw_align = resetMagHeading(_mag_filt_state, false, false);
+		_control_status.flags.yaw_align = resetMagHeading(_mag_lpf.getState(), false, false);
 
-		// initialise the state covariance matrix
-		initialiseCovariance();
 
 		// update the yaw angle variance using the variance of the measurement
-		if (_control_status.flags.ev_yaw) {
-			// using error estimate from external vision data TODO: this is never true
-			increaseQuatYawErrVariance(sq(fmaxf(_ev_sample_delayed.angErr, 1.0e-2f)));
-		} else if (_params.mag_fusion_type <= MAG_FUSE_TYPE_AUTOFW) {
+		if (_params.mag_fusion_type <= MAG_FUSE_TYPE_3D) {
 			// using magnetic heading tuning parameter
 			increaseQuatYawErrVariance(sq(fmaxf(_params.mag_heading_noise, 1.0e-2f)));
-		}
-
-		if (_control_status.flags.rng_hgt) {
-			// if we are using the range finder as the primary source, then calculate the baro height at origin so  we can use baro as a backup
-			// so it can be used as a backup ad set the initial height using the range finder
-			const baroSample &baro_newest = _baro_buffer.get_newest();
-			_baro_hgt_offset = baro_newest.hgt;
-			_state.pos(2) = -math::max(_rng_filt_state * _R_rng_to_earth_2_2, _params.rng_gnd_clearance);
-			ECL_INFO("EKF using range finder height - commencing alignment");
-
-		} else if (_control_status.flags.ev_hgt) {
-			// if we are using external vision data for height, then the vertical position state needs to be reset
-			// because the initialisation position is not the zero datum
-			resetHeight();
-
 		}
 
 		// try to initialise the terrain estimator
@@ -288,9 +207,9 @@ bool Ekf::initialiseFilter()
 
 		// reset the essential fusion timeout counters
 		_time_last_hgt_fuse = _time_last_imu;
-		_time_last_pos_fuse = _time_last_imu;
+		_time_last_hor_pos_fuse = _time_last_imu;
 		_time_last_delpos_fuse = _time_last_imu;
-		_time_last_vel_fuse = _time_last_imu;
+		_time_last_hor_vel_fuse = _time_last_imu;
 		_time_last_hagl_fuse = _time_last_imu;
 		_time_last_of_fuse = _time_last_imu;
 
@@ -301,25 +220,35 @@ bool Ekf::initialiseFilter()
 	}
 }
 
-void Ekf::predictState()
+bool Ekf::initialiseTilt()
 {
-	if (!_earth_rate_initialised) {
-		if (_NED_origin_initialised) {
-			calcEarthRateNED(_earth_rate_NED, (float)_pos_ref.lat_rad);
-			_earth_rate_initialised = true;
-		}
+	if (_accel_lpf.getState().norm() < 0.001f) {
+		return false;
 	}
 
+	// get initial roll and pitch estimate from delta velocity vector, assuming vehicle is static
+	Vector3f gravity_in_body = _accel_lpf.getState();
+	gravity_in_body.normalize();
+	const float pitch = asinf(gravity_in_body(0));
+	const float roll = atan2f(-gravity_in_body(1), -gravity_in_body(2));
+
+	const Eulerf euler_init(roll, pitch, 0.0f);
+	_state.quat_nominal = Quatf(euler_init);
+	_R_to_earth = Dcmf(_state.quat_nominal);
+
+	return true;
+}
+
+void Ekf::predictState()
+{
 	// apply imu bias corrections
-	Vector3f corrected_delta_ang = _imu_sample_delayed.delta_ang - _state.gyro_bias;
-	Vector3f corrected_delta_vel = _imu_sample_delayed.delta_vel - _state.accel_bias;
+	Vector3f corrected_delta_ang = _imu_sample_delayed.delta_ang - _state.delta_ang_bias;
+	const Vector3f corrected_delta_vel = _imu_sample_delayed.delta_vel - _state.delta_vel_bias;
 
 	// correct delta angles for earth rotation rate
 	corrected_delta_ang -= -_R_to_earth.transpose() * _earth_rate_NED * _imu_sample_delayed.delta_ang_dt;
 
-	// convert the delta angle to a delta quaternion
-	Quatf dq;
-	dq.from_axis_angle(corrected_delta_ang);
+	const Quatf dq(AxisAnglef{corrected_delta_ang});
 
 	// rotate the previous quaternion by the delta quaternion using a quaternion multiplication
 	_state.quat_nominal = _state.quat_nominal * dq;
@@ -328,13 +257,12 @@ void Ekf::predictState()
 	_state.quat_nominal.normalize();
 
 	// save the previous value of velocity so we can use trapzoidal integration
-	Vector3f vel_last = _state.vel;
+	const Vector3f vel_last = _state.vel;
 
-	// update transformation matrix from body to world frame
-	_R_to_earth = quat_to_invrotmat(_state.quat_nominal);
+	_R_to_earth = Dcmf(_state.quat_nominal);
 
 	// Calculate an earth frame delta velocity
-	Vector3f corrected_delta_vel_ef = _R_to_earth * corrected_delta_vel;
+	const Vector3f corrected_delta_vel_ef = _R_to_earth * corrected_delta_vel;
 
 	// calculate a filtered horizontal acceleration with a 1 sec time constant
 	// this are used for manoeuvre detection elsewhere
@@ -361,76 +289,6 @@ void Ekf::predictState()
 	_dt_ekf_avg = 0.99f * _dt_ekf_avg + 0.01f * input;
 }
 
-bool Ekf::collect_imu(const imuSample &imu)
-{
-	// accumulate and downsample IMU data across a period FILTER_UPDATE_PERIOD_MS long
-
-	// copy imu data to local variables
-	_imu_sample_new = imu;
-
-	// accumulate the time deltas
-	_imu_down_sampled.delta_ang_dt += imu.delta_ang_dt;
-	_imu_down_sampled.delta_vel_dt += imu.delta_vel_dt;
-
-	// use a quaternion to accumulate delta angle data
-	// this quaternion represents the rotation from the start to end of the accumulation period
-	Quatf delta_q;
-	delta_q.rotate(imu.delta_ang);
-	_q_down_sampled = _q_down_sampled * delta_q;
-	_q_down_sampled.normalize();
-
-	// rotate the accumulated delta velocity data forward each time so it is always in the updated rotation frame
-	Dcmf delta_R(delta_q.inversed());
-	_imu_down_sampled.delta_vel = delta_R * _imu_down_sampled.delta_vel;
-
-	// accumulate the most recent delta velocity data at the updated rotation frame
-	// assume effective sample time is halfway between the previous and current rotation frame
-	_imu_down_sampled.delta_vel += (imu.delta_vel + delta_R * imu.delta_vel) * 0.5f;
-
-	// if the target time delta between filter prediction steps has been exceeded
-	// write the accumulated IMU data to the ring buffer
-	const float target_dt = FILTER_UPDATE_PERIOD_S;
-
-	if (_imu_down_sampled.delta_ang_dt >= target_dt - _imu_collection_time_adj) {
-
-		// accumulate the amount of time to advance the IMU collection time so that we meet the
-		// average EKF update rate requirement
-		_imu_collection_time_adj += 0.01f * (_imu_down_sampled.delta_ang_dt - target_dt);
-		_imu_collection_time_adj = math::constrain(_imu_collection_time_adj, -0.5f * target_dt, 0.5f * target_dt);
-
-		imuSample imu_sample_new;
-		imu_sample_new.delta_ang = _q_down_sampled.to_axis_angle();
-		imu_sample_new.delta_vel = _imu_down_sampled.delta_vel;
-		imu_sample_new.delta_ang_dt = _imu_down_sampled.delta_ang_dt;
-		imu_sample_new.delta_vel_dt = _imu_down_sampled.delta_vel_dt;
-		imu_sample_new.time_us = imu.time_us;
-
-		_imu_buffer.push(imu_sample_new);
-
-		// get the oldest data from the buffer
-		_imu_sample_delayed = _imu_buffer.get_oldest();
-
-		// calculate the minimum interval between observations required to guarantee no loss of data
-		// this will occur if data is overwritten before its time stamp falls behind the fusion time horizon
-		_min_obs_interval_us = (imu_sample_new.time_us - _imu_sample_delayed.time_us) / (_obs_buffer_length - 1);
-
-		// reset
-		_imu_down_sampled.delta_ang.setZero();
-		_imu_down_sampled.delta_vel.setZero();
-		_imu_down_sampled.delta_ang_dt = 0.0f;
-		_imu_down_sampled.delta_vel_dt = 0.0f;
-		_q_down_sampled(0) = 1.0f;
-		_q_down_sampled(1) = _q_down_sampled(2) = _q_down_sampled(3) = 0.0f;
-
-		_imu_updated = true;
-
-	} else {
-		_imu_updated = false;
-	}
-
-	return _imu_updated;
-}
-
 /*
  * Implement a strapdown INS algorithm using the latest IMU data at the current time horizon.
  * Buffer the INS states and calculate the difference with the EKF states at the delayed fusion time horizon.
@@ -444,13 +302,13 @@ bool Ekf::collect_imu(const imuSample &imu)
 void Ekf::calculateOutputStates()
 {
 	// Use full rate IMU data at the current time horizon
-	const imuSample &imu = _imu_sample_new;
+	const imuSample &imu = _newest_high_rate_imu_sample;
 
 	// correct delta angles for bias offsets
 	const float dt_scale_correction = _dt_imu_avg / _dt_ekf_avg;
 
 	// Apply corrections to the delta angle required to track the quaternion states at the EKF fusion time horizon
-	const Vector3f delta_angle{imu.delta_ang - _state.gyro_bias * dt_scale_correction + _delta_angle_corr};
+	const Vector3f delta_angle{imu.delta_ang - _state.delta_ang_bias * dt_scale_correction + _delta_angle_corr};
 
 	// calculate a yaw change about the earth frame vertical
 	const float spin_del_ang_D = _R_to_earth_now(2, 0) * delta_angle(0) +
@@ -462,9 +320,7 @@ void Ekf::calculateOutputStates()
 	// Note fixed coefficients are used to save operations. The exact time constant is not important.
 	_yaw_rate_lpf_ef = 0.95f * _yaw_rate_lpf_ef + 0.05f * spin_del_ang_D / imu.delta_ang_dt;
 
-	// convert the delta angle to an equivalent delta quaternions
-	Quatf dq;
-	dq.from_axis_angle(delta_angle);
+	const Quatf dq(AxisAnglef{delta_angle});
 
 	// rotate the previous INS quaternion by the delta quaternions
 	_output_new.time_us = imu.time_us;
@@ -474,10 +330,10 @@ void Ekf::calculateOutputStates()
 	_output_new.quat_nominal.normalize();
 
 	// calculate the rotation matrix from body to earth frame
-	_R_to_earth_now = quat_to_invrotmat(_output_new.quat_nominal);
+	_R_to_earth_now = Dcmf(_output_new.quat_nominal);
 
 	// correct delta velocity for bias offsets
-	const Vector3f delta_vel{imu.delta_vel - _state.accel_bias * dt_scale_correction};
+	const Vector3f delta_vel{imu.delta_vel - _state.delta_vel_bias * dt_scale_correction};
 
 	// rotate the delta velocity to earth frame
 	Vector3f delta_vel_NED{_R_to_earth_now * delta_vel};
@@ -513,7 +369,7 @@ void Ekf::calculateOutputStates()
 		const Vector3f ang_rate = imu.delta_ang * (1.0f / imu.delta_ang_dt);
 
 		// calculate the velocity of the IMU relative to the body origin
-		const Vector3f vel_imu_rel_body = cross_product(ang_rate, _params.imu_pos_body);
+		const Vector3f vel_imu_rel_body = ang_rate % _params.imu_pos_body;
 
 		// rotate the relative velocity into earth frame
 		_vel_imu_rel_body_ned = _R_to_earth_now * vel_imu_rel_body;
@@ -530,9 +386,7 @@ void Ekf::calculateOutputStates()
 		_output_vert_delayed = _output_vert_buffer.get_oldest();
 
 		// calculate the quaternion delta between the INS and EKF quaternions at the EKF fusion time horizon
-		Quatf quat_inv = _state.quat_nominal.inversed();
-		Quatf q_error =  quat_inv * _output_sample_delayed.quat_nominal;
-		q_error.normalize();
+		const Quatf q_error( (_state.quat_nominal.inversed() * _output_sample_delayed.quat_nominal).normalized() );
 
 		// convert the quaternion delta to a delta angle
 		float scalar;
@@ -667,7 +521,7 @@ Quatf Ekf::calculate_quaternion() const
 {
 	// Correct delta angle data for bias errors using bias state estimates from the EKF and also apply
 	// corrections required to track the EKF quaternion states
-	const Vector3f delta_angle{_imu_sample_new.delta_ang - _state.gyro_bias * (_dt_imu_avg / _dt_ekf_avg) + _delta_angle_corr};
+	const Vector3f delta_angle{_newest_high_rate_imu_sample.delta_ang - _state.delta_ang_bias * (_dt_imu_avg / _dt_ekf_avg) + _delta_angle_corr};
 
 	// increment the quaternions using the corrected delta angle vector
 	// the quaternions must always be normalised after modification

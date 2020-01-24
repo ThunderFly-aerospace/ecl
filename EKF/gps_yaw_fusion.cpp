@@ -48,10 +48,10 @@
 void Ekf::fuseGpsAntYaw()
 {
 	// assign intermediate state variables
-	float q0 = _state.quat_nominal(0);
-	float q1 = _state.quat_nominal(1);
-	float q2 = _state.quat_nominal(2);
-	float q3 = _state.quat_nominal(3);
+	const float q0 = _state.quat_nominal(0);
+	const float q1 = _state.quat_nominal(1);
+	const float q2 = _state.quat_nominal(2);
+	const float q3 = _state.quat_nominal(3);
 
 	float R_YAW = 1.0f;
 	float predicted_hdg;
@@ -154,7 +154,7 @@ void Ekf::fuseGpsAntYaw()
 		PH[row] = 0.0f;
 
 		for (uint8_t col = 0; col <= 3; col++) {
-			PH[row] += P[row][col] * H_YAW[col];
+			PH[row] += P(row,col) * H_YAW[col];
 		}
 
 		_heading_innov_var += H_YAW[row] * PH[row];
@@ -174,7 +174,7 @@ void Ekf::fuseGpsAntYaw()
 
 		// we reinitialise the covariance matrix and abort this fusion step
 		initialiseCovariance();
-		ECL_ERR("EKF GPS yaw fusion numerical error - covariance reset");
+		ECL_ERR_TIMESTAMPED("GPS yaw fusion numerical error - covariance reset");
 		return;
 	}
 
@@ -186,7 +186,7 @@ void Ekf::fuseGpsAntYaw()
 		Kfusion[row] = 0.0f;
 
 		for (uint8_t col = 0; col <= 3; col++) {
-			Kfusion[row] += P[row][col] * H_YAW[col];
+			Kfusion[row] += P(row,col) * H_YAW[col];
 		}
 
 		Kfusion[row] *= heading_innov_var_inv;
@@ -197,7 +197,7 @@ void Ekf::fuseGpsAntYaw()
 			Kfusion[row] = 0.0f;
 
 			for (uint8_t col = 0; col <= 3; col++) {
-				Kfusion[row] += P[row][col] * H_YAW[col];
+				Kfusion[row] += P(row,col) * H_YAW[col];
 			}
 
 			Kfusion[row] *= heading_innov_var_inv;
@@ -233,7 +233,7 @@ void Ekf::fuseGpsAntYaw()
 	// apply covariance correction via P_new = (I -K*H)*P
 	// first calculate expression for KHP
 	// then calculate P - KHP
-	float KHP[_k_num_states][_k_num_states];
+	matrix::SquareMatrix<float, _k_num_states> KHP;
 	float KH[4];
 
 	for (unsigned row = 0; row < _k_num_states; row++) {
@@ -244,11 +244,11 @@ void Ekf::fuseGpsAntYaw()
 		KH[3] = Kfusion[row] * H_YAW[3];
 
 		for (unsigned column = 0; column < _k_num_states; column++) {
-			float tmp = KH[0] * P[0][column];
-			tmp += KH[1] * P[1][column];
-			tmp += KH[2] * P[2][column];
-			tmp += KH[3] * P[3][column];
-			KHP[row][column] = tmp;
+			float tmp = KH[0] * P(0,column);
+			tmp += KH[1] * P(1,column);
+			tmp += KH[2] * P(2,column);
+			tmp += KH[3] * P(3,column);
+			KHP(row,column) = tmp;
 		}
 	}
 
@@ -258,10 +258,9 @@ void Ekf::fuseGpsAntYaw()
 	_fault_status.flags.bad_hdg = false;
 
 	for (int i = 0; i < _k_num_states; i++) {
-		if (P[i][i] < KHP[i][i]) {
+		if (P(i,i) < KHP(i,i)) {
 			// zero rows and columns
-			zeroRows(P, i, i);
-			zeroCols(P, i, i);
+			P.uncorrelateCovarianceSetVariance<1>(i, 0.0f);
 
 			//flag as unhealthy
 			healthy = false;
@@ -277,12 +276,12 @@ void Ekf::fuseGpsAntYaw()
 		// apply the covariance corrections
 		for (unsigned row = 0; row < _k_num_states; row++) {
 			for (unsigned column = 0; column < _k_num_states; column++) {
-				P[row][column] = P[row][column] - KHP[row][column];
+				P(row,column) = P(row,column) - KHP(row,column);
 			}
 		}
 
 		// correct the covariance matrix for gross errors
-		fixCovarianceErrors();
+		fixCovarianceErrors(true);
 
 		// apply the state corrections
 		fuse(Kfusion, _heading_innov);
@@ -296,38 +295,36 @@ bool Ekf::resetGpsAntYaw()
 	if (ISFINITE(_gps_sample_delayed.yaw)) {
 
 		// define the predicted antenna array vector and rotate into earth frame
-		Vector3f ant_vec_bf = {cosf(_gps_yaw_offset), sinf(_gps_yaw_offset), 0.0f};
-		Vector3f ant_vec_ef = _R_to_earth * ant_vec_bf;
+		const Vector3f ant_vec_bf = {cosf(_gps_yaw_offset), sinf(_gps_yaw_offset), 0.0f};
+		const Vector3f ant_vec_ef = _R_to_earth * ant_vec_bf;
 
 		// check if antenna array vector is within 30 degrees of vertical and therefore unable to provide a reliable heading
 		if (fabsf(ant_vec_ef(2)) > cosf(math::radians(30.0f)))  {
 			return false;
 		}
 
-		float predicted_yaw =  atan2f(ant_vec_ef(1),ant_vec_ef(0));
+		const float predicted_yaw =  atan2f(ant_vec_ef(1),ant_vec_ef(0));
 
 		// get measurement and correct for antenna array yaw offset
-		float measured_yaw = _gps_sample_delayed.yaw + _gps_yaw_offset;
+		const float measured_yaw = _gps_sample_delayed.yaw + _gps_yaw_offset;
 
 		// calculate the amount the yaw needs to be rotated by
 		float yaw_delta = wrap_pi(measured_yaw - predicted_yaw);
 
 		// save a copy of the quaternion state for later use in calculating the amount of reset change
-		Quatf quat_before_reset = _state.quat_nominal;
+		const Quatf quat_before_reset = _state.quat_nominal;
 		Quatf quat_after_reset = _state.quat_nominal;
 
 		// obtain the yaw angle using the best conditioned from either a Tait-Bryan 321 or 312 sequence
 		// to avoid gimbal lock
 		if (fabsf(_R_to_earth(2, 0)) < fabsf(_R_to_earth(2, 1))) {
 			// get the roll, pitch, yaw estimates from the quaternion states using a 321 Tait-Bryan rotation sequence
-			Quatf q_init(_state.quat_nominal);
-			Eulerf euler_init(q_init);
+			Eulerf euler_init(_state.quat_nominal);
 
 			// correct the yaw angle
 			euler_init(2) += yaw_delta;
 			euler_init(2) = wrap_pi(euler_init(2));
 
-			// update the quaternions
 			quat_after_reset = Quatf(euler_init);
 
 		} else {
@@ -367,8 +364,7 @@ bool Ekf::resetGpsAntYaw()
 		}
 
 		// calculate the amount that the quaternion has changed by
-		Quatf q_error =  _state.quat_nominal * quat_before_reset.inversed();
-		q_error.normalize();
+		const Quatf q_error( (_state.quat_nominal * quat_before_reset.inversed()).normalized() );
 
 		// convert the quaternion delta to a delta angle
 		Vector3f delta_ang_error;
@@ -395,12 +391,7 @@ bool Ekf::resetGpsAntYaw()
 			_state_reset_status.quat_change = q_error;
 
 			// update transformation matrix from body to world frame using the current estimate
-			_R_to_earth = quat_to_invrotmat(_state.quat_nominal);
-
-			// reset the rotation from the EV to EKF frame of reference if it is being used
-			if ((_params.fusion_mode & MASK_ROTATE_EV) && (_params.fusion_mode & MASK_USE_EVPOS)) {
-				resetExtVisRotMat();
-			}
+			_R_to_earth = Dcmf(_state.quat_nominal);
 
 			// update the yaw angle variance using the variance of the measurement
 			increaseQuatYawErrVariance(sq(fmaxf(_params.mag_heading_noise, 1.0e-2f)));

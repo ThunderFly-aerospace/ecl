@@ -35,10 +35,15 @@ cmake_minimum_required(VERSION 3.0)
 
 project(ECL CXX)
 
-if (NOT CMAKE_BUILD_TYPE)
-    set(CMAKE_BUILD_TYPE "RelWithDebInfo" CACHE STRING "Build type" FORCE)
-    message(STATUS "set build type to ${CMAKE_BUILD_TYPE}")
+if(NOT CMAKE_BUILD_TYPE)
+	# force debug builds if we test ECL as standalone
+	if(BUILD_TESTING AND CMAKE_SOURCE_DIR STREQUAL PROJECT_SOURCE_DIR)
+		set(CMAKE_BUILD_TYPE "Debug" CACHE STRING "Build type" FORCE)
+	else()
+		set(CMAKE_BUILD_TYPE "RelWithDebInfo" CACHE STRING "Build type" FORCE)
+	endif()
 endif()
+message(STATUS "build type is ${CMAKE_BUILD_TYPE}")
 
 set_property(CACHE CMAKE_BUILD_TYPE PROPERTY STRINGS "Debug;Release;RelWithDebInfo;MinSizeRel;Coverage")
 
@@ -59,12 +64,23 @@ set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 option(COV_HTML "Display html for coverage" OFF)
 option(ECL_ASAN "Enable ECL address sanitizer" OFF)
 
-set(CMAKE_CXX_FLAGS_COVERAGE
-    "--coverage -fprofile-arcs -ftest-coverage -fno-default-inline -fno-inline -fno-inline-small-functions -fno-elide-constructors"
-    CACHE STRING "Flags used by the C++ compiler during coverage builds" FORCE)
-set(CMAKE_EXE_LINKER_FLAGS_COVERAGE
-    "--coverage -ftest-coverage -lgcov"
-    CACHE STRING "Flags used for linking binaries during coverage builds" FORCE)
+if (("${CMAKE_CXX_COMPILER_ID}" MATCHES "Clang") OR ("${CMAKE_CXX_COMPILER_ID}" MATCHES "AppleClang"))
+	set(CMAKE_CXX_FLAGS_COVERAGE
+		"--coverage -ftest-coverage -fdiagnostics-absolute-paths -O0 -fprofile-arcs -fno-inline-functions -fno-elide-constructors"
+		CACHE STRING "Flags used by the C++ compiler during coverage builds" FORCE)
+	set(CMAKE_EXE_LINKER_FLAGS_COVERAGE
+		"-ftest-coverage -fdiagnostics-absolute-paths"
+		CACHE STRING "Flags used for linking binaries during coverage builds" FORCE)
+else()
+	set(CMAKE_CXX_FLAGS_COVERAGE
+		# Bring back -fprofile-abs-path when GCC 9 is available on Ubuntu LTS
+		"--coverage -fprofile-arcs -ftest-coverage -O0 -fno-default-inline -fno-inline -fno-inline-small-functions -fno-elide-constructors"
+		CACHE STRING "Flags used by the C++ compiler during coverage builds" FORCE)
+	set(CMAKE_EXE_LINKER_FLAGS_COVERAGE
+		"--coverage -ftest-coverage -lgcov"
+		CACHE STRING "Flags used for linking binaries during coverage builds" FORCE)
+endif()
+
 mark_as_advanced(CMAKE_CXX_FLAGS_COVERAGE CMAKE_C_FLAGS_COVERAGE CMAKE_EXE_LINKER_FLAGS_COVERAGE)
 
 
@@ -90,7 +106,7 @@ if(CMAKE_SOURCE_DIR STREQUAL PROJECT_SOURCE_DIR)
 	elseif(CMAKE_COMPILER_IS_GNUCC OR CMAKE_COMPILER_IS_GNUCXX)
 		add_compile_options(
 			-pedantic
-		
+
 			-Wall
 			-Wextra
 			-Werror
@@ -99,11 +115,10 @@ if(CMAKE_SOURCE_DIR STREQUAL PROJECT_SOURCE_DIR)
 		)
 	endif()
 
-	# testing
-	include(CTest)
-	enable_testing()
-	
 	if(BUILD_TESTING)
+
+		include(CTest)
+
 		option(ECL_TESTS "Build ECL tests" ON)
 
 		add_custom_target(check
@@ -111,20 +126,13 @@ if(CMAKE_SOURCE_DIR STREQUAL PROJECT_SOURCE_DIR)
 			DEPENDS ecl_EKF
 			USES_TERMINAL
 		)
-
-		option(EKF_PYTHON_TESTS "Build the EKF python tests" OFF)
-
-		if (EKF_PYTHON_TESTS)
-			# swig requires -fPIC
-			set(CMAKE_POSITION_INDEPENDENT_CODE ON)
-		endif()
 	endif()
 
 	# fetch latest matrix from github
 	include(ExternalProject)
 	ExternalProject_Add(matrix
 			GIT_REPOSITORY "https://github.com/PX4/Matrix.git"
-			GIT_TAG 6b0777d815cd64902eb0575d56ec52f53aebb4a0
+			GIT_TAG d18be0d0fa17d9a0b60ab34bad3e33160f907b09
 			UPDATE_COMMAND ""
 			PATCH_COMMAND ""
 			CONFIGURE_COMMAND ""
@@ -167,26 +175,35 @@ add_subdirectory(l1)
 add_subdirectory(tecs)
 add_subdirectory(validation)
 
+if(BUILD_TESTING AND CMAKE_SOURCE_DIR STREQUAL PROJECT_SOURCE_DIR)
+	add_subdirectory(test)
+endif()
+
 #=============================================================================
 # Coverage
 #
 if (${CMAKE_BUILD_TYPE} STREQUAL "Coverage")
 
-    add_custom_target(coverage
-        COMMAND ${CMAKE_CTEST_COMMAND}
-        COMMAND lcov --capture --directory . --output-file coverage.info
-        COMMAND lcov --remove coverage.info '/usr/*' --output-file coverage.info # filter out system
-        COMMAND lcov --remove coverage.info 'build/coverage_build/EKF/swig/*' --output-file coverage.info
-        COMMAND lcov --summary coverage.info
-        WORKING_DIRECTORY ${CMAKE_BUILD_DIR}
-        DEPENDS check
-        )
+	add_custom_target(coverage
+		COMMAND ${CMAKE_CTEST_COMMAND}
+		COMMAND lcov --capture --directory . --output-file coverage.info
+		COMMAND lcov --remove coverage.info  --output-file coverage.info '/usr/*' '${CMAKE_BINARY_DIR}/*' # filter out system
+		COMMAND lcov --summary coverage.info
+		WORKING_DIRECTORY ${CMAKE_BUILD_DIR}
+		DEPENDS check
+	)
 
-    add_custom_target(coverage_html
-        COMMAND genhtml coverage.info --output-directory out
-        WORKING_DIRECTORY ${CMAKE_BUILD_DIR}
-        DEPENDS coverage
-        )
+	add_custom_target(coverage_html
+		COMMAND genhtml coverage.info --output-directory out
+		WORKING_DIRECTORY ${CMAKE_BUILD_DIR}
+		DEPENDS coverage
+	)
+
+	add_custom_target(coverage_html_view
+		COMMAND x-www-browser out/index.html
+		WORKING_DIRECTORY ${CMAKE_BUILD_DIR}
+		DEPENDS coverage_html
+	)
 
 endif()
 
@@ -197,17 +214,17 @@ endif()
 if(CMAKE_SOURCE_DIR STREQUAL PROJECT_SOURCE_DIR)
 
 	option(BUILD_DOXYGEN "Build doxygen documentation" OFF)
-	
+
 	if (BUILD_DOXYGEN)
 		find_package(Doxygen)
 		if (DOXYGEN_FOUND)
 			# set input and output files
 			set(DOXYGEN_IN ${CMAKE_CURRENT_SOURCE_DIR}/docs/Doxyfile.in)
 			set(DOXYGEN_OUT ${CMAKE_CURRENT_BINARY_DIR}/Doxyfile)
-	
+
 			# request to configure the file
 			configure_file(${DOXYGEN_IN} ${DOXYGEN_OUT} @ONLY)
-	
+
 			# note the option ALL which allows to build the docs together with the application
 			add_custom_target(doxygen ALL
 				COMMAND ${DOXYGEN_EXECUTABLE} ${DOXYGEN_OUT}
@@ -217,9 +234,10 @@ if(CMAKE_SOURCE_DIR STREQUAL PROJECT_SOURCE_DIR)
 				VERBATIM
 				USES_TERMINAL
 			)
-	
+
 		else()
 			message(FATAL_ERROR "Doxygen needs to be installed to generate documentation")
 		endif()
 	endif()
 endif()
+
